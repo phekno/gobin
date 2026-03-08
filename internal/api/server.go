@@ -445,7 +445,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 				"queue":  resp,
 				"paused": s.queue.IsPaused(),
 			})
-			fmt.Fprintf(w, "event: queue\ndata: %s\n\n", data)
+			_, _ = fmt.Fprintf(w, "event: queue\ndata: %s\n\n", data)
 			flusher.Flush()
 		}
 	}

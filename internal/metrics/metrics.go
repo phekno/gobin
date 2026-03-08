@@ -93,10 +93,10 @@ func Handler() http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		for name, c := range defaultRegistry.counters {
-			fmt.Fprintf(w, "# TYPE %s counter\n%s %d\n", name, name, c.Value())
+			_, _ = fmt.Fprintf(w, "# TYPE %s counter\n%s %d\n", name, name, c.Value())
 		}
 		for name, g := range defaultRegistry.gauges {
-			fmt.Fprintf(w, "# TYPE %s gauge\n%s %d\n", name, name, g.Value())
+			_, _ = fmt.Fprintf(w, "# TYPE %s gauge\n%s %d\n", name, name, g.Value())
 		}
 	}
 }
