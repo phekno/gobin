@@ -65,8 +65,8 @@ api:
 }
 
 func TestLoadEnvExpansion(t *testing.T) {
-	os.Setenv("TEST_GOBIN_HOST", "env.example.com")
-	defer os.Unsetenv("TEST_GOBIN_HOST")
+	_ = os.Setenv("TEST_GOBIN_HOST", "env.example.com")
+	defer func() { _ = os.Unsetenv("TEST_GOBIN_HOST") }()
 
 	content := `
 servers:

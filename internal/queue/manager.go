@@ -129,7 +129,6 @@ type Manager struct {
 	cancel  map[string]context.CancelFunc
 
 	maxConcurrent int
-	activeCount   atomic.Int32
 }
 
 // NewManager creates a new queue manager.

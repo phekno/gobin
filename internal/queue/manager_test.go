@@ -37,7 +37,7 @@ func TestManager_Add(t *testing.T) {
 func TestManager_AddDuplicate(t *testing.T) {
 	m := NewManager(3)
 	job := &Job{ID: "dup-1", Name: "First"}
-	m.Add(job)
+	_ = m.Add(job)
 
 	err := m.Add(&Job{ID: "dup-1", Name: "Second"})
 	if err == nil {
@@ -47,7 +47,7 @@ func TestManager_AddDuplicate(t *testing.T) {
 
 func TestManager_Remove(t *testing.T) {
 	m := NewManager(3)
-	m.Add(&Job{ID: "rm-1", Name: "To Remove"})
+	_ = m.Add(&Job{ID: "rm-1", Name: "To Remove"})
 
 	if err := m.Remove("rm-1"); err != nil {
 		t.Fatalf("Remove failed: %v", err)
@@ -67,9 +67,9 @@ func TestManager_RemoveNotFound(t *testing.T) {
 
 func TestManager_Next_PriorityOrder(t *testing.T) {
 	m := NewManager(3)
-	m.Add(&Job{ID: "low", Name: "Low", Priority: 1})
-	m.Add(&Job{ID: "high", Name: "High", Priority: 5})
-	m.Add(&Job{ID: "mid", Name: "Mid", Priority: 3})
+	_ = m.Add(&Job{ID: "low", Name: "Low", Priority: 1})
+	_ = m.Add(&Job{ID: "high", Name: "High", Priority: 5})
+	_ = m.Add(&Job{ID: "mid", Name: "Mid", Priority: 3})
 
 	next := m.Next()
 	if next == nil {
@@ -82,7 +82,7 @@ func TestManager_Next_PriorityOrder(t *testing.T) {
 
 func TestManager_Next_WhenPaused(t *testing.T) {
 	m := NewManager(3)
-	m.Add(&Job{ID: "p-1", Name: "Test"})
+	_ = m.Add(&Job{ID: "p-1", Name: "Test"})
 
 	m.Pause("")
 	if next := m.Next(); next != nil {
@@ -97,7 +97,7 @@ func TestManager_Next_WhenPaused(t *testing.T) {
 
 func TestManager_PauseResumeJob(t *testing.T) {
 	m := NewManager(3)
-	m.Add(&Job{ID: "pr-1", Name: "Test"})
+	_ = m.Add(&Job{ID: "pr-1", Name: "Test"})
 
 	m.Pause("pr-1")
 
@@ -127,8 +127,8 @@ func TestManager_ActiveJobs(t *testing.T) {
 
 	// Add directly to avoid status override — Add sets StatusQueued,
 	// so set downloading status after add
-	m.Add(downloading)
-	m.Add(queued)
+	_ = m.Add(downloading)
+	_ = m.Add(queued)
 
 	// Override status after Add
 	m.mu.Lock()

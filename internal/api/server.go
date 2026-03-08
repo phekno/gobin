@@ -90,7 +90,7 @@ func (s *Server) registerRoutes() {
 	} else {
 		s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, "<h1>GoBin</h1><p>Web UI not built. Run: make frontend</p>")
+			_, _ = fmt.Fprint(w, "<h1>GoBin</h1><p>Web UI not built. Run: make frontend</p>")
 		})
 	}
 }
@@ -331,7 +331,7 @@ func (s *Server) handleNZBUpload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing nzbfile"})
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	parsed, err := nzb.Parse(file)
 	if err != nil {
@@ -456,7 +456,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 func generateID() string {

@@ -122,7 +122,7 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 
-	metricsServer.Shutdown(shutdownCtx)
+	_ = metricsServer.Shutdown(shutdownCtx)
 
 	slog.Info("gobin stopped")
 }

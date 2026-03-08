@@ -190,7 +190,7 @@ func (c *Config) Redacted() *Config {
 	// Deep copy via marshal/unmarshal
 	data, _ := yaml.Marshal(c)
 	copy := &Config{}
-	yaml.Unmarshal(data, copy)
+	_ = yaml.Unmarshal(data, copy)
 
 	// Redact server passwords
 	for i := range copy.Servers {

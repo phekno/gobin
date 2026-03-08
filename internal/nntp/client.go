@@ -66,18 +66,18 @@ func Dial(ctx context.Context, cfg ServerConfig) (*Client, error) {
 	// Read server greeting
 	code, _, err := client.readResponse()
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("reading greeting: %w", err)
 	}
 	if code != 200 && code != 201 {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("unexpected greeting code: %d", code)
 	}
 
 	// Authenticate if credentials provided
 	if cfg.Username != "" {
 		if err := client.authenticate(cfg.Username, cfg.Password); err != nil {
-			conn.Close()
+			_ = conn.Close()
 			return nil, fmt.Errorf("authentication failed: %w", err)
 		}
 	}
@@ -211,7 +211,7 @@ func (c *Client) readMultiLine() ([]byte, error) {
 func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.sendCommand("QUIT")
+	_, _, _ = c.sendCommand("QUIT")
 	return c.conn.Close()
 }
 
@@ -220,8 +220,8 @@ func (c *Client) Alive() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.conn.SetDeadline(time.Now().Add(5 * time.Second))
-	defer c.conn.SetDeadline(time.Time{})
+	_ = c.conn.SetDeadline(time.Now().Add(5 * time.Second))
+	defer func() { _ = c.conn.SetDeadline(time.Time{}) }()
 
 	code, _, err := c.sendCommand("DATE")
 	return err == nil && code == 111
@@ -255,7 +255,7 @@ func (p *Pool) Get(ctx context.Context) (*Client, error) {
 		if client.Alive() {
 			return client, nil
 		}
-		client.Close()
+		_ = client.Close()
 		p.mu.Lock()
 		p.active--
 		p.mu.Unlock()
@@ -294,7 +294,7 @@ func (p *Pool) Put(client *Client) {
 	case p.conns <- client:
 	default:
 		// Pool is full, close the connection
-		client.Close()
+		_ = client.Close()
 		p.mu.Lock()
 		p.active--
 		p.mu.Unlock()
@@ -305,6 +305,6 @@ func (p *Pool) Put(client *Client) {
 func (p *Pool) Close() {
 	close(p.conns)
 	for client := range p.conns {
-		client.Close()
+		_ = client.Close()
 	}
 }

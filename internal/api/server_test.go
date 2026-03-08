@@ -19,14 +19,14 @@ type mockHealthChecker struct{}
 func (m *mockHealthChecker) LivenessHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
-		w.Write([]byte(`{"status":"alive"}`))
+		_, _ = w.Write([]byte(`{"status":"alive"}`))
 	}
 }
 
 func (m *mockHealthChecker) ReadinessHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
-		w.Write([]byte(`{"status":"ready"}`))
+		_, _ = w.Write([]byte(`{"status":"ready"}`))
 	}
 }
 
@@ -219,7 +219,7 @@ func TestHandleNZBUpload_ValidFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	part.Write([]byte(`<?xml version="1.0"?>
+	_, _ = part.Write([]byte(`<?xml version="1.0"?>
 <nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">
   <head><meta type="title">Test Upload</meta></head>
   <file poster="u@e" date="1000" subject="test">
@@ -227,7 +227,7 @@ func TestHandleNZBUpload_ValidFile(t *testing.T) {
     <segments><segment bytes="100" number="1">a@b</segment></segments>
   </file>
 </nzb>`))
-	writer.Close()
+	_ = writer.Close()
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/api/nzb/upload", &buf)
@@ -239,7 +239,7 @@ func TestHandleNZBUpload_ValidFile(t *testing.T) {
 	}
 
 	var body map[string]any
-	json.NewDecoder(rec.Body).Decode(&body)
+	_ = json.NewDecoder(rec.Body).Decode(&body)
 	if body["filename"] != "test.nzb" {
 		t.Errorf("filename = %v, want test.nzb", body["filename"])
 	}
@@ -259,7 +259,7 @@ func TestHandleStatus(t *testing.T) {
 	}
 
 	var body map[string]any
-	json.NewDecoder(rec.Body).Decode(&body)
+	_ = json.NewDecoder(rec.Body).Decode(&body)
 	if _, ok := body["version"]; !ok {
 		t.Error("response missing 'version' field")
 	}
@@ -423,7 +423,7 @@ func TestHandleGetConfig_ReturnsRedactedYAML(t *testing.T) {
 	}
 
 	var body map[string]any
-	json.NewDecoder(rec.Body).Decode(&body)
+	_ = json.NewDecoder(rec.Body).Decode(&body)
 	yamlStr, ok := body["config_yaml"].(string)
 	if !ok || yamlStr == "" {
 		t.Fatal("response missing config_yaml")
@@ -466,7 +466,7 @@ api:
 
 	if rec.Code != http.StatusOK {
 		var errBody map[string]string
-		json.NewDecoder(rec.Body).Decode(&errBody)
+		_ = json.NewDecoder(rec.Body).Decode(&errBody)
 		t.Fatalf("status = %d, want 200: %s", rec.Code, errBody["error"])
 	}
 
@@ -522,7 +522,7 @@ api:
 
 	if rec.Code != http.StatusOK {
 		var errBody map[string]string
-		json.NewDecoder(rec.Body).Decode(&errBody)
+		_ = json.NewDecoder(rec.Body).Decode(&errBody)
 		t.Fatalf("status = %d: %s", rec.Code, errBody["error"])
 	}
 

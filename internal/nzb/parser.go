@@ -118,7 +118,7 @@ func ParseFile(path string) (*NZB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening nzb: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return Parse(f)
 }
 

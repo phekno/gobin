@@ -27,7 +27,7 @@ func TestLivenessHandler_AlwaysOK(t *testing.T) {
 	}
 
 	var body map[string]string
-	json.NewDecoder(rec.Body).Decode(&body)
+	_ = json.NewDecoder(rec.Body).Decode(&body)
 	if body["status"] != "alive" {
 		t.Errorf("status = %q, want alive", body["status"])
 	}
@@ -46,7 +46,7 @@ func TestReadinessHandler_AllHealthy(t *testing.T) {
 	}
 
 	var body map[string]any
-	json.NewDecoder(rec.Body).Decode(&body)
+	_ = json.NewDecoder(rec.Body).Decode(&body)
 	if body["status"] != "ready" {
 		t.Errorf("status = %q, want ready", body["status"])
 	}
@@ -72,7 +72,7 @@ func TestReadinessHandler_OneUnhealthy(t *testing.T) {
 	}
 
 	var body map[string]any
-	json.NewDecoder(rec.Body).Decode(&body)
+	_ = json.NewDecoder(rec.Body).Decode(&body)
 	if body["status"] != "not_ready" {
 		t.Errorf("status = %q, want not_ready", body["status"])
 	}

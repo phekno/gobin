@@ -34,7 +34,8 @@ RUN CGO_ENABLED=0 go build \
 # --- Runtime ---
 FROM alpine:3.23
 
-RUN apk add --no-cache \
+RUN apk upgrade --no-cache \
+    && apk add --no-cache \
     par2cmdline \
     7zip \
     && adduser -D -u 1000 gobin

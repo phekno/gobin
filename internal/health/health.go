@@ -62,7 +62,7 @@ func (h *Checker) LivenessHandler() http.HandlerFunc {
 		// Liveness is simple: if we can respond, we're alive
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{"status": "alive"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "alive"})
 	}
 }
 
@@ -91,7 +91,7 @@ func (h *Checker) ReadinessHandler() http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"status": overall,
 			"checks": checks,
 		})

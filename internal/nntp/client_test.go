@@ -106,7 +106,7 @@ func fakeNNTPServer(t *testing.T, handler func(net.Conn)) (string, int) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	t.Cleanup(func() { ln.Close() })
+	t.Cleanup(func() { _ = ln.Close() })
 
 	go func() {
 		conn, err := ln.Accept()
@@ -114,7 +114,7 @@ func fakeNNTPServer(t *testing.T, handler func(net.Conn)) (string, int) {
 			return
 		}
 		handler(conn)
-		conn.Close()
+		_ = conn.Close()
 	}()
 
 	addr := ln.Addr().(*net.TCPAddr)
@@ -123,11 +123,11 @@ func fakeNNTPServer(t *testing.T, handler func(net.Conn)) (string, int) {
 
 func TestDial_BasicConnection(t *testing.T) {
 	host, port := fakeNNTPServer(t, func(conn net.Conn) {
-		fmt.Fprintf(conn, "200 Welcome\r\n")
+		_, _ = fmt.Fprintf(conn, "200 Welcome\r\n")
 		// Read and discard QUIT
 		buf := make([]byte, 1024)
-		conn.Read(buf)
-		fmt.Fprintf(conn, "205 Bye\r\n")
+		_, _ = conn.Read(buf)
+		_, _ = fmt.Fprintf(conn, "205 Bye\r\n")
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -146,7 +146,7 @@ func TestDial_BasicConnection(t *testing.T) {
 
 func TestDial_BadGreeting(t *testing.T) {
 	host, port := fakeNNTPServer(t, func(conn net.Conn) {
-		fmt.Fprintf(conn, "502 Access denied\r\n")
+		_, _ = fmt.Fprintf(conn, "502 Access denied\r\n")
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -160,32 +160,32 @@ func TestDial_BadGreeting(t *testing.T) {
 
 func TestDial_WithAuth(t *testing.T) {
 	host, port := fakeNNTPServer(t, func(conn net.Conn) {
-		fmt.Fprintf(conn, "200 Welcome\r\n")
+		_, _ = fmt.Fprintf(conn, "200 Welcome\r\n")
 		scanner := bufio.NewScanner(conn)
 
 		// Expect AUTHINFO USER
 		if scanner.Scan() {
 			line := scanner.Text()
 			if !strings.HasPrefix(line, "AUTHINFO USER") {
-				fmt.Fprintf(conn, "500 unexpected\r\n")
+				_, _ = fmt.Fprintf(conn, "500 unexpected\r\n")
 				return
 			}
-			fmt.Fprintf(conn, "381 Password required\r\n")
+			_, _ = fmt.Fprintf(conn, "381 Password required\r\n")
 		}
 
 		// Expect AUTHINFO PASS
 		if scanner.Scan() {
 			line := scanner.Text()
 			if !strings.HasPrefix(line, "AUTHINFO PASS") {
-				fmt.Fprintf(conn, "500 unexpected\r\n")
+				_, _ = fmt.Fprintf(conn, "500 unexpected\r\n")
 				return
 			}
-			fmt.Fprintf(conn, "281 Authentication accepted\r\n")
+			_, _ = fmt.Fprintf(conn, "281 Authentication accepted\r\n")
 		}
 
 		// Handle QUIT
 		if scanner.Scan() {
-			fmt.Fprintf(conn, "205 Bye\r\n")
+			_, _ = fmt.Fprintf(conn, "205 Bye\r\n")
 		}
 	})
 
@@ -207,24 +207,24 @@ func TestDial_WithAuth(t *testing.T) {
 
 func TestBody_Success(t *testing.T) {
 	host, port := fakeNNTPServer(t, func(conn net.Conn) {
-		fmt.Fprintf(conn, "200 Welcome\r\n")
+		_, _ = fmt.Fprintf(conn, "200 Welcome\r\n")
 		scanner := bufio.NewScanner(conn)
 
 		if scanner.Scan() {
 			// Expect BODY <message-id>
 			line := scanner.Text()
 			if !strings.Contains(line, "<test@msg>") {
-				fmt.Fprintf(conn, "430 No such article\r\n")
+				_, _ = fmt.Fprintf(conn, "430 No such article\r\n")
 				return
 			}
-			fmt.Fprintf(conn, "222 body follows\r\n")
-			fmt.Fprintf(conn, "this is the body\r\n")
-			fmt.Fprintf(conn, ".\r\n")
+			_, _ = fmt.Fprintf(conn, "222 body follows\r\n")
+			_, _ = fmt.Fprintf(conn, "this is the body\r\n")
+			_, _ = fmt.Fprintf(conn, ".\r\n")
 		}
 
 		// Handle QUIT
 		if scanner.Scan() {
-			fmt.Fprintf(conn, "205 Bye\r\n")
+			_, _ = fmt.Fprintf(conn, "205 Bye\r\n")
 		}
 	})
 
@@ -248,15 +248,15 @@ func TestBody_Success(t *testing.T) {
 
 func TestBody_NotFound(t *testing.T) {
 	host, port := fakeNNTPServer(t, func(conn net.Conn) {
-		fmt.Fprintf(conn, "200 Welcome\r\n")
+		_, _ = fmt.Fprintf(conn, "200 Welcome\r\n")
 		scanner := bufio.NewScanner(conn)
 
 		if scanner.Scan() {
-			fmt.Fprintf(conn, "430 No such article\r\n")
+			_, _ = fmt.Fprintf(conn, "430 No such article\r\n")
 		}
 
 		if scanner.Scan() {
-			fmt.Fprintf(conn, "205 Bye\r\n")
+			_, _ = fmt.Fprintf(conn, "205 Bye\r\n")
 		}
 	})
 
@@ -277,14 +277,14 @@ func TestBody_NotFound(t *testing.T) {
 
 func TestPool_GetAndPut(t *testing.T) {
 	host, port := fakeNNTPServer(t, func(conn net.Conn) {
-		fmt.Fprintf(conn, "200 Welcome\r\n")
+		_, _ = fmt.Fprintf(conn, "200 Welcome\r\n")
 		scanner := bufio.NewScanner(conn)
 		for scanner.Scan() {
 			line := scanner.Text()
 			if strings.HasPrefix(line, "DATE") {
-				fmt.Fprintf(conn, "111 20260308120000\r\n")
+				_, _ = fmt.Fprintf(conn, "111 20260308120000\r\n")
 			} else if strings.HasPrefix(line, "QUIT") {
-				fmt.Fprintf(conn, "205 Bye\r\n")
+				_, _ = fmt.Fprintf(conn, "205 Bye\r\n")
 				return
 			}
 		}
