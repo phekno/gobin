@@ -27,8 +27,8 @@ go.work.sum
 # env file
 .env
 
-# Local config and build output
-config/
+# Local config and build output (runtime config directory, not internal/config/)
+/config/
 bin/
 
 # Frontend

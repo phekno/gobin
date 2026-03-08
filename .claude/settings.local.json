@@ -22,7 +22,10 @@
       "Bash(pkill:*)",
       "Bash(gh run:*)",
       "Bash(git add:*)",
-      "Bash(git stash:*)"
+      "Bash(git stash:*)",
+      "Bash(gh issue:*)",
+      "Bash(go version:*)",
+      "Bash(echo exit: $?:*)"
     ]
   }
 }

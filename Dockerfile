@@ -1,5 +1,5 @@
 # --- Frontend ---
-FROM node:22-alpine AS frontend
+FROM node:24-alpine AS frontend
 
 WORKDIR /web
 
@@ -12,7 +12,7 @@ COPY web/ .
 RUN npx vite build --outDir /webui-dist
 
 # --- Builder ---
-FROM golang:1.22-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 ARG VERSION=dev
 ARG COMMIT=unknown
@@ -32,7 +32,7 @@ RUN CGO_ENABLED=0 go build \
     -o /gobin ./cmd/gobin
 
 # --- Runtime ---
-FROM alpine:3.19
+FROM alpine:3.23
 
 RUN apk add --no-cache \
     par2cmdline \
