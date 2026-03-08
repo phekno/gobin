@@ -137,7 +137,7 @@ func TestDial_BasicConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	if client.server != fmt.Sprintf("%s:%d", host, port) {
 		t.Errorf("server = %q", client.server)
@@ -202,7 +202,7 @@ func TestDial_WithAuth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial with auth failed: %v", err)
 	}
-	client.Close()
+	_ = client.Close()
 }
 
 func TestBody_Success(t *testing.T) {
@@ -235,7 +235,7 @@ func TestBody_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	data, err := client.Body("test@msg")
 	if err != nil {
@@ -267,7 +267,7 @@ func TestBody_NotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	_, err = client.Body("missing@msg")
 	if err == nil {
