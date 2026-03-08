@@ -1,0 +1,105 @@
+# GoBin Configuration
+# Copy to config.yaml and edit to match your setup.
+
+# --- General ---
+general:
+  download_dir: /downloads/incomplete    # Active downloads go here
+  complete_dir: /downloads/complete      # Finished downloads moved here
+  watch_dir: /downloads/nzb              # Drop NZB files here to auto-add
+  permissions: "775"
+  log_level: info                        # debug, info, warn, error
+
+# --- Usenet Servers ---
+# You can define multiple servers. GoBin will load-balance across them.
+# Backup servers (priority > 0) are only used when primary servers fail.
+servers:
+  - name: primary
+    host: news.example.com
+    port: 563
+    tls: true
+    username: myuser
+    password: mypassword
+    connections: 20                       # Max simultaneous connections
+    priority: 0                          # 0 = primary, 1+ = backup
+    retention: 4000                      # Days of retention (informational)
+
+  - name: backup-block
+    host: block.example.com
+    port: 563
+    tls: true
+    username: blockuser
+    password: blockpass
+    connections: 8
+    priority: 1
+
+# --- Categories ---
+# Map categories to output directories and post-processing scripts.
+categories:
+  - name: movies
+    dir: Movies
+    script: ""
+  - name: tv
+    dir: TV
+    script: ""
+  - name: music
+    dir: Music
+    script: ""
+  - name: software
+    dir: Software
+    script: ""
+
+# --- Download Settings ---
+downloads:
+  max_retries: 3                         # Retries per segment on failure
+  article_cache_mb: 512                  # RAM cache for decoded articles
+  temp_dir: /tmp/gobin                   # Temp space for assembly
+  speed_limit_kbps: 0                    # 0 = unlimited
+
+# --- Scheduling ---
+# Optionally limit speed during certain hours.
+schedule:
+  enabled: false
+  rules:
+    - days: [mon, tue, wed, thu, fri]
+      start: "08:00"
+      end: "17:00"
+      speed_limit_kbps: 50000            # 50 MB/s during work hours
+
+# --- Post-Processing ---
+postprocess:
+  par2_enabled: true
+  par2_path: /usr/bin/par2                # Path to par2cmdline binary
+  unpack_enabled: true
+  unrar_path: /usr/bin/unrar
+  sevenz_path: /usr/bin/7z
+  cleanup_after_unpack: true             # Remove .rar/.par2 after success
+  script_dir: /config/scripts            # Custom post-processing scripts
+
+# --- Web UI / API ---
+api:
+  listen: 0.0.0.0
+  port: 8080
+  api_key: "change-me-to-something-random"
+  base_url: /                            # Set if behind a reverse proxy subpath
+  cors_origins: []                       # Empty = same-origin only
+
+# --- Notifications ---
+notifications:
+  on_complete: true
+  on_failure: true
+  webhooks:
+    - name: discord
+      url: https://discord.com/api/webhooks/your/webhook
+      template: '{"content": "{{.Name}} - {{.Status}}"}'
+
+# --- RSS Feeds ---
+rss:
+  enabled: false
+  interval_minutes: 15
+  feeds:
+    - name: my-indexer
+      url: https://my.indexer.com/rss?apikey=xyz
+      category: tv
+      filters:
+        - include: "1080p"
+        - exclude: "CAM"
