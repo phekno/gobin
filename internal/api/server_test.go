@@ -6,6 +6,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -37,8 +38,10 @@ func testConfigMgr(t *testing.T, cfg *config.Config) *config.Manager {
 }
 
 func newTestServer(apiKey string) *Server {
-	cfgMgr := config.NewManager("/tmp/test-config.yaml", &config.Config{
-		API: config.API{APIKey: apiKey, Port: 8080},
+	dir, _ := os.MkdirTemp("", "gobin-test-*")
+	cfgMgr := config.NewManager(filepath.Join(dir, "config.yaml"), &config.Config{
+		API:     config.API{APIKey: apiKey, Port: 8080},
+		General: config.General{DownloadDir: dir + "/downloads", CompleteDir: dir + "/complete"},
 	})
 	return NewServer(&mockHealthChecker{}, queue.NewManager(3), cfgMgr, nil, "test")
 }

@@ -25,7 +25,10 @@
       "Bash(git stash:*)",
       "Bash(gh issue:*)",
       "Bash(go version:*)",
-      "Bash(echo exit: $?:*)"
+      "Bash(echo exit: $?:*)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:forums.sabnzbd.org)"
     ]
   }
 }

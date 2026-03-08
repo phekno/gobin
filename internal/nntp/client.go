@@ -247,6 +247,11 @@ func NewPool(cfg ServerConfig, maxConns int) *Pool {
 	}
 }
 
+// MaxConns returns the maximum number of connections for this pool.
+func (p *Pool) MaxConns() int {
+	return p.maxConns
+}
+
 // Get retrieves a connection from the pool, creating one if needed.
 func (p *Pool) Get(ctx context.Context) (*Client, error) {
 	// Try to get an existing connection

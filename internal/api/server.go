@@ -1,13 +1,17 @@
 package api
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -79,6 +83,10 @@ func (s *Server) registerRoutes() {
 
 	// Mount with auth
 	s.mux.Handle("/api/", s.authMiddleware(api))
+
+	// SABnzbd API compatibility (for Sonarr/Radarr/Lidarr)
+	// Auth is handled inside the handler (SABnzbd uses ?apikey= param)
+	s.mux.HandleFunc("/sabnzbd/api", s.handleSABnzbd)
 
 	// Health probes (unauthenticated)
 	s.mux.HandleFunc("/healthz", s.health.LivenessHandler())
@@ -333,7 +341,14 @@ func (s *Server) handleNZBUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = file.Close() }()
 
-	parsed, err := nzb.Parse(file)
+	// Read the entire NZB into memory so we can parse AND save it
+	data, err := io.ReadAll(file)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "reading upload: " + err.Error()})
+		return
+	}
+
+	parsed, err := nzb.Parse(bytes.NewReader(data))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid NZB: " + err.Error()})
 		return
@@ -345,9 +360,17 @@ func (s *Server) handleNZBUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	name = strings.TrimSuffix(name, ".nzb")
 
+	// Save NZB file to disk
+	nzbPath, err := s.saveNZB(name, data)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "saving NZB: " + err.Error()})
+		return
+	}
+
 	job := &queue.Job{
 		ID:            generateID(),
 		Name:          name,
+		NZBPath:       nzbPath,
 		Category:      r.FormValue("category"),
 		TotalSegments: parsed.TotalSegments(),
 		TotalBytes:    parsed.TotalBytes(),
@@ -457,6 +480,20 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// saveNZB writes an NZB file to the watch/nzb directory for the engine to process.
+func (s *Server) saveNZB(name string, data []byte) (string, error) {
+	cfg := s.configMgr.Get()
+	nzbDir := cfg.General.DownloadDir + "/nzb"
+	if err := os.MkdirAll(nzbDir, 0755); err != nil {
+		return "", err
+	}
+	path := filepath.Join(nzbDir, name+".nzb")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 func generateID() string {

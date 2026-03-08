@@ -66,6 +66,20 @@ type Job struct {
 	mu sync.RWMutex
 }
 
+// SetStatus updates the job status (thread-safe).
+func (j *Job) SetStatus(s Status) {
+	j.mu.Lock()
+	j.Status = s
+	j.mu.Unlock()
+}
+
+// GetStatus returns the current job status (thread-safe).
+func (j *Job) GetStatus() Status {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	return j.Status
+}
+
 // Progress returns download progress as a percentage (0-100).
 func (j *Job) Progress() float64 {
 	total := j.TotalSegments

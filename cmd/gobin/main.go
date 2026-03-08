@@ -14,6 +14,7 @@ import (
 
 	"github.com/phekno/gobin/internal/api"
 	"github.com/phekno/gobin/internal/config"
+	"github.com/phekno/gobin/internal/engine"
 	"github.com/phekno/gobin/internal/health"
 	"github.com/phekno/gobin/internal/logging"
 	"github.com/phekno/gobin/internal/metrics"
@@ -83,6 +84,11 @@ func main() {
 	metricsMux := http.NewServeMux()
 	metricsMux.HandleFunc("/metrics", metrics.Handler())
 	metricsAddr := "0.0.0.0:9090"
+
+	// Start download engine
+	dl := engine.New(queueMgr, cfgMgr)
+	go dl.Run(ctx)
+	checker.Healthy("engine")
 
 	// Start health checks
 	go checker.StartPeriodicChecks(ctx, 15*time.Second)
