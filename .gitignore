@@ -27,6 +27,14 @@ go.work.sum
 # env file
 .env
 
+# Local config and build output
+config/
+bin/
+
+# Frontend
+web/node_modules/
+internal/webui/dist/
+
 # Editor/IDE
 # .idea/
 # .vscode/

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -14,9 +15,10 @@ type Server struct {
 	// These would be interfaces in production for testability
 	// Queue   queue.ManagerInterface
 	// Config  *config.Config
-	apiKey  string
-	health  HealthChecker
-	mux     *http.ServeMux
+	apiKey   string
+	health   HealthChecker
+	staticFS fs.FS
+	mux      *http.ServeMux
 }
 
 // HealthChecker is satisfied by health.Checker
@@ -25,11 +27,12 @@ type HealthChecker interface {
 	ReadinessHandler() http.HandlerFunc
 }
 
-func NewServer(apiKey string, health HealthChecker) *Server {
+func NewServer(apiKey string, health HealthChecker, staticFS fs.FS) *Server {
 	s := &Server{
-		apiKey: apiKey,
-		health: health,
-		mux:    http.NewServeMux(),
+		apiKey:   apiKey,
+		health:   health,
+		staticFS: staticFS,
+		mux:      http.NewServeMux(),
 	}
 	s.registerRoutes()
 	return s
@@ -73,11 +76,14 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/readyz", s.health.ReadinessHandler())
 
 	// Static web UI (served from embedded files)
-	// s.mux.Handle("/", http.FileServer(http.FS(webui.Assets)))
-	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, "<h1>GoBin</h1><p>Web UI coming soon.</p>")
-	})
+	if s.staticFS != nil {
+		s.mux.Handle("/", http.FileServer(http.FS(s.staticFS)))
+	} else {
+		s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, "<h1>GoBin</h1><p>Web UI not built. Run: make frontend</p>")
+		})
+	}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

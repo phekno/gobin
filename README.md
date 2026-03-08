@@ -65,9 +65,9 @@ The current metrics implementation uses `sync/atomic` counters exposed as JSON o
 
 ### Kubernetes deployment
 
-GoBin is designed to run in a Kubernetes cluster. A plain Kustomize-based deployment is included in `k8s/` with base + prod overlay.
+GoBin is designed to run in a Kubernetes cluster. The intended deployment method is the [bjw-s app-template](https://github.com/bjw-s-labs/helm-charts) Helm chart managed by Flux CD, defined in the cluster GitOps repo (not this repo). Deployment manifests (HelmRelease, Kustomize overlays, Secrets) live there, not here.
 
-For production, the intended deployment method is the [bjw-s app-template](https://github.com/bjw-s-labs/helm-charts) Helm chart managed by Flux CD, defined in the cluster GitOps repo (not this repo). The app is built to be compatible with that pattern: health probes are mounted outside auth middleware, metrics are on a separate port, and the container runs as non-root.
+The app is built to be compatible with that pattern: health probes are mounted outside auth middleware, metrics are on a separate port, and the container runs as non-root.
 
 Key k8s design choices:
 
@@ -82,7 +82,7 @@ Key k8s design choices:
 The Dockerfile is a multi-stage build:
 
 1. **Builder stage**: Compiles the Go binary with `CGO_ENABLED=0` for a static build. Accepts `VERSION` and `COMMIT` build args for stamping.
-2. **Runtime stage**: Alpine 3.19 with `par2cmdline`, `unrar`, `p7zip`, and `tini` installed. Runs as non-root user (UID 1000). `tini` is used as PID 1 for proper signal forwarding in Kubernetes (Go doesn't always handle SIGTERM correctly when it's PID 1 in a container).
+2. **Runtime stage**: Alpine 3.19 with `par2cmdline` and `7zip` installed. Runs as non-root user (UID 1000). `7zip` handles both RAR and 7z extraction.
 
 The image exposes two ports: 8080 (API/UI) and 9090 (metrics).
 
@@ -178,17 +178,6 @@ gobin/
 │       ├── gobin-dashboard.json     # 15-panel Grafana dashboard
 │       └── dashboard-configmap.yaml # Auto-provisioning via sidecar label
 │
-├── k8s/                             # Plain Kustomize deployment
-│   ├── base/
-│   │   ├── namespace.yaml
-│   │   ├── configmap.yaml
-│   │   ├── secret.yaml
-│   │   ├── deployment.yaml          # ServiceAccount, probes, preStop hook
-│   │   ├── service.yaml             # ClusterIP + Ingress + PVC + NetworkPolicy + ServiceMonitor
-│   │   └── kustomization.yaml
-│   └── overlays/prod/
-│       └── kustomization.yaml       # Production patches (more resources, Longhorn, 2Ti PVC)
-│
 ├── .github/workflows/
 │   ├── ci.yaml                      # Test + lint + build on push/PR
 │   └── release.yaml                 # Multi-arch Docker → GHCR + GitHub Release on v* tag
@@ -261,6 +250,49 @@ See `config.example.yaml` for the complete annotated configuration. Key sections
 
 ---
 
+## Running with Docker
+
+The quickest way to run GoBin:
+
+```bash
+# 1. Create a config directory and copy the example config
+mkdir -p config
+cp config.example.yaml config/config.yaml
+
+# 2. Edit with your Usenet server details (or use env vars — see below)
+vim config/config.yaml
+
+# 3. Run with Docker
+docker run -d \
+  -p 8080:8080 \
+  -p 9090:9090 \
+  -v $(pwd)/config:/config:ro \
+  -v gobin-downloads:/downloads \
+  -e USENET_HOST=news.example.com \
+  -e USENET_USER=myuser \
+  -e USENET_PASS=mypassword \
+  -e GOBIN_API_KEY=change-me-to-something-random \
+  ghcr.io/phekno/gobin:latest
+```
+
+Or use the included `docker-compose.yml`:
+
+```bash
+mkdir -p config
+cp config.example.yaml config/config.yaml
+# Edit config/config.yaml with your settings
+docker compose up --build
+```
+
+The config file supports `${ENV_VAR}` syntax, so you can reference the environment variables above in your YAML (e.g., `host: ${USENET_HOST}`).
+
+Once running:
+- **API**: http://localhost:8080
+- **Health probes**: `/healthz` (liveness), `/readyz` (readiness)
+- **Metrics**: http://localhost:9090/metrics
+
+---
+
 ## Local Development
 
 ```bash
@@ -275,17 +307,25 @@ The setup script checks for Go 1.22+, runs `go mod tidy`, builds the binary, run
 To run locally after setup:
 
 ```bash
-# Edit config with your Usenet server details
+# Create a config from the example
+mkdir -p config
+cp config.example.yaml config/config.yaml
 vim config/config.yaml
 
-# Run
+# Build and run
+make build
 ./bin/gobin --config config/config.yaml
-
-# Or via Docker
-docker compose up --build
 ```
 
-The API is at `http://localhost:8080`, health probes at `/healthz` and `/readyz`, metrics at `http://localhost:9090/metrics`.
+Other useful make targets:
+
+```bash
+make test       # run tests with race detector
+make cover      # tests + coverage report (coverage.html)
+make lint       # golangci-lint
+make docker     # build Docker image
+make help       # list all targets
+```
 
 ---
 
@@ -316,9 +356,8 @@ For anyone picking this up (including Claude Code):
 | NZB parsing | Custom | Simple format, full control, zero deps |
 | NNTP client | Custom | Full control over pooling, TLS, buffers |
 | yEnc decoder | Custom | Performance-critical hot path, abandoned alternatives |
-| PAR2/unpack | Shell out to `par2cmdline`, `unrar`, `7z` | Mature C tools, not worth reimplementing |
-| Container base | Alpine 3.19 | Small, has par2/unrar/7z packages |
-| PID 1 | `tini` | Proper signal forwarding in containers |
+| PAR2/unpack | Shell out to `par2cmdline`, `7z` | Mature C tools, not worth reimplementing |
+| Container base | Alpine 3.19 | Small, has par2/7zip packages |
 | Helm chart | bjw-s app-template v4 (in cluster repo) | Homelab community standard |
 | GitOps | Flux CD (in cluster repo) | Already running on target cluster |
 | CI/CD | GitHub Actions | Repo is on GitHub, native integration |

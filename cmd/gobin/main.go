@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -15,7 +16,9 @@ import (
 	"github.com/phekno/gobin/internal/config"
 	"github.com/phekno/gobin/internal/health"
 	"github.com/phekno/gobin/internal/logging"
+	"github.com/phekno/gobin/internal/metrics"
 	"github.com/phekno/gobin/internal/queue"
+	"github.com/phekno/gobin/internal/webui"
 )
 
 var (
@@ -64,15 +67,22 @@ func main() {
 
 	// API server
 	apiAddr := fmt.Sprintf("%s:%d", cfg.API.Listen, cfg.API.Port)
-	srv := api.NewServer(cfg.API.APIKey, checker)
+
+	// Serve embedded frontend (falls back to placeholder if not built)
+	var staticFS fs.FS
+	if f, err := fs.Sub(webui.Assets, "dist"); err == nil {
+		// Check if the dist directory has any files
+		entries, _ := fs.ReadDir(f, ".")
+		if len(entries) > 0 {
+			staticFS = f
+		}
+	}
+
+	srv := api.NewServer(cfg.API.APIKey, checker, staticFS)
 
 	// Metrics server (separate port)
 	metricsMux := http.NewServeMux()
-	metricsMux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
-		// Placeholder — will use promhttp.Handler() once prometheus dep is added
-		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprint(w, "# gobin metrics placeholder\n")
-	})
+	metricsMux.HandleFunc("/metrics", metrics.Handler())
 	metricsAddr := "0.0.0.0:9090"
 
 	// Start health checks

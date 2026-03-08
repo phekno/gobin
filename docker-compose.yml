@@ -1,0 +1,18 @@
+services:
+  gobin:
+    build: .
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    volumes:
+      - ./config:/config:ro
+      - downloads:/downloads
+    environment:
+      - USENET_HOST=news.example.com
+      - USENET_USER=myuser
+      - USENET_PASS=mypassword
+      - GOBIN_API_KEY=change-me-to-something-random
+    restart: unless-stopped
+
+volumes:
+  downloads:

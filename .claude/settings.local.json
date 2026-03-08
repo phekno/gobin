@@ -4,7 +4,22 @@
       "Bash(go mod:*)",
       "Bash(go build:*)",
       "Bash(go test:*)",
-      "Bash(go vet:*)"
+      "Bash(go vet:*)",
+      "Bash(make build:*)",
+      "Bash(make cover:*)",
+      "Bash(make clean:*)",
+      "Bash(docker build:*)",
+      "Bash(docker run:*)",
+      "Bash(make test:*)",
+      "Bash(chmod 644:*)",
+      "Bash(make image:*)",
+      "Bash(curl:*)",
+      "Bash(make image-stop:*)",
+      "Bash(npm create:*)",
+      "Bash(npm install:*)",
+      "Bash(npm run:*)",
+      "Bash(make frontend:*)",
+      "Bash(pkill:*)"
     ]
   }
 }
