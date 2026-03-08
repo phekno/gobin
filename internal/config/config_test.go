@@ -91,9 +91,13 @@ general:
   download_dir: /tmp
 `
 	path := writeTemp(t, content)
-	_, err := Load(path)
-	if err == nil {
-		t.Error("expected error for config with no servers")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	// No servers is valid — app starts but can't download
+	if cfg.General.DownloadDir != "/tmp" {
+		t.Errorf("DownloadDir = %q", cfg.General.DownloadDir)
 	}
 }
 
@@ -122,6 +126,32 @@ servers:
 	}
 	if cfg.Servers[0].Connections != 1 {
 		t.Errorf("default Connections = %d (should be clamped to 1)", cfg.Servers[0].Connections)
+	}
+}
+
+func TestLoadCreatesDefaultConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "subdir", "config.yaml")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	// Default config should have been created
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("config file not created: %v", err)
+	}
+
+	// Should have sensible defaults
+	if cfg.API.Port != 8080 {
+		t.Errorf("default API port = %d", cfg.API.Port)
+	}
+	if len(cfg.Servers) != 1 {
+		t.Fatalf("expected 1 default server, got %d", len(cfg.Servers))
+	}
+	if cfg.Servers[0].Port != 563 {
+		t.Errorf("default server port = %d", cfg.Servers[0].Port)
 	}
 }
 

@@ -83,6 +83,18 @@ api:
   base_url: /                            # Set if behind a reverse proxy subpath
   cors_origins: []                       # Empty = same-origin only
 
+  # Forward Auth (Authelia / Authentik / Pocket ID)
+  # When enabled, GoBin trusts authentication headers from the reverse proxy.
+  # WARNING: GoBin MUST be behind the auth proxy when this is enabled.
+  # Direct access would allow anyone to forge the headers.
+  forward_auth:
+    enabled: false
+    user_header: Remote-User             # Header containing the username
+    name_header: Remote-Name             # Header containing display name
+    email_header: Remote-Email           # Header containing email
+    groups_header: Remote-Groups         # Comma-separated groups
+    allowed_groups: []                   # Empty = any authenticated user
+
 # --- Notifications ---
 notifications:
   on_complete: true

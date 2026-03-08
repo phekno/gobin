@@ -3,9 +3,12 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
+
+const redactedPlaceholder = "********"
 
 // Config represents the complete GoBin configuration.
 type Config struct {
@@ -76,11 +79,21 @@ type PostProcess struct {
 }
 
 type API struct {
-	Listen      string   `yaml:"listen"`
-	Port        int      `yaml:"port"`
-	APIKey      string   `yaml:"api_key"`
-	BaseURL     string   `yaml:"base_url"`
-	CORSOrigins []string `yaml:"cors_origins"`
+	Listen      string      `yaml:"listen"`
+	Port        int         `yaml:"port"`
+	APIKey      string      `yaml:"api_key"`
+	BaseURL     string      `yaml:"base_url"`
+	CORSOrigins []string    `yaml:"cors_origins"`
+	ForwardAuth ForwardAuth `yaml:"forward_auth"`
+}
+
+type ForwardAuth struct {
+	Enabled       bool     `yaml:"enabled"`
+	UserHeader    string   `yaml:"user_header"`
+	NameHeader    string   `yaml:"name_header"`
+	EmailHeader   string   `yaml:"email_header"`
+	GroupsHeader  string   `yaml:"groups_header"`
+	AllowedGroups []string `yaml:"allowed_groups"`
 }
 
 type Notifications struct {
@@ -114,13 +127,22 @@ type RSSFilter struct {
 }
 
 // Load reads, expands environment variables in, and parses a YAML config file.
+// If the file does not exist, a default config is created at the given path.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("reading config: %w", err)
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("reading config: %w", err)
+		}
+		if writeErr := createDefault(path); writeErr != nil {
+			return nil, fmt.Errorf("creating default config: %w", writeErr)
+		}
+		data, err = os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("reading config: %w", err)
+		}
 	}
 
-	// Expand ${ENV_VAR} references
 	expanded := os.ExpandEnv(string(data))
 
 	cfg := &Config{}
@@ -130,11 +152,96 @@ func Load(path string) (*Config, error) {
 
 	applyDefaults(cfg)
 
-	if err := validate(cfg); err != nil {
+	if err := Validate(cfg); err != nil {
 		return nil, fmt.Errorf("validating config: %w", err)
 	}
 
 	return cfg, nil
+}
+
+// Save writes a config to the given path as YAML using atomic write.
+func Save(path string, cfg *Config) error {
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("marshalling config: %w", err)
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// Validate checks a config for errors.
+func Validate(cfg *Config) error {
+	for i, s := range cfg.Servers {
+		if s.Host == "" {
+			return fmt.Errorf("server %d: host is required", i)
+		}
+		if s.Port == 0 {
+			return fmt.Errorf("server %d: port is required", i)
+		}
+	}
+	return nil
+}
+
+// Redacted returns a copy of the config with sensitive fields masked.
+func (c *Config) Redacted() *Config {
+	// Deep copy via marshal/unmarshal
+	data, _ := yaml.Marshal(c)
+	copy := &Config{}
+	yaml.Unmarshal(data, copy)
+
+	// Redact server passwords
+	for i := range copy.Servers {
+		if copy.Servers[i].Password != "" {
+			copy.Servers[i].Password = redactedPlaceholder
+		}
+	}
+	// Redact API key
+	if copy.API.APIKey != "" {
+		copy.API.APIKey = redactedPlaceholder
+	}
+	// Redact webhook URLs (may contain tokens)
+	for i := range copy.Notifications.Webhooks {
+		if copy.Notifications.Webhooks[i].URL != "" {
+			copy.Notifications.Webhooks[i].URL = redactedPlaceholder
+		}
+	}
+	// Redact RSS feed URLs (may contain API keys)
+	for i := range copy.RSS.Feeds {
+		if copy.RSS.Feeds[i].URL != "" {
+			copy.RSS.Feeds[i].URL = redactedPlaceholder
+		}
+	}
+	return copy
+}
+
+// MergeRedacted takes an edited config (potentially with redacted placeholders)
+// and restores real secret values from the original where placeholders appear.
+func MergeRedacted(edited *Config, original *Config) {
+	// Restore server passwords
+	for i := range edited.Servers {
+		if edited.Servers[i].Password == redactedPlaceholder && i < len(original.Servers) {
+			edited.Servers[i].Password = original.Servers[i].Password
+		}
+	}
+	// Restore API key
+	if edited.API.APIKey == redactedPlaceholder {
+		edited.API.APIKey = original.API.APIKey
+	}
+	// Restore webhook URLs
+	for i := range edited.Notifications.Webhooks {
+		if edited.Notifications.Webhooks[i].URL == redactedPlaceholder && i < len(original.Notifications.Webhooks) {
+			edited.Notifications.Webhooks[i].URL = original.Notifications.Webhooks[i].URL
+		}
+	}
+	// Restore RSS feed URLs
+	for i := range edited.RSS.Feeds {
+		if edited.RSS.Feeds[i].URL == redactedPlaceholder && i < len(original.RSS.Feeds) {
+			edited.RSS.Feeds[i].URL = original.RSS.Feeds[i].URL
+		}
+	}
 }
 
 func applyDefaults(cfg *Config) {
@@ -156,7 +263,21 @@ func applyDefaults(cfg *Config) {
 	if cfg.Downloads.MaxRetries == 0 {
 		cfg.Downloads.MaxRetries = 3
 	}
-
+	// Forward auth header defaults
+	if cfg.API.ForwardAuth.Enabled {
+		if cfg.API.ForwardAuth.UserHeader == "" {
+			cfg.API.ForwardAuth.UserHeader = "Remote-User"
+		}
+		if cfg.API.ForwardAuth.NameHeader == "" {
+			cfg.API.ForwardAuth.NameHeader = "Remote-Name"
+		}
+		if cfg.API.ForwardAuth.EmailHeader == "" {
+			cfg.API.ForwardAuth.EmailHeader = "Remote-Email"
+		}
+		if cfg.API.ForwardAuth.GroupsHeader == "" {
+			cfg.API.ForwardAuth.GroupsHeader = "Remote-Groups"
+		}
+	}
 	// Clamp server connections to at least 1
 	for i := range cfg.Servers {
 		if cfg.Servers[i].Connections < 1 {
@@ -165,17 +286,34 @@ func applyDefaults(cfg *Config) {
 	}
 }
 
-func validate(cfg *Config) error {
-	if len(cfg.Servers) == 0 {
-		return fmt.Errorf("at least one server must be configured")
-	}
-	for i, s := range cfg.Servers {
-		if s.Host == "" {
-			return fmt.Errorf("server %d: host is required", i)
+func createDefault(path string) error {
+	content := `# GoBin configuration — edit with your Usenet server details.
+# See config.example.yaml for all options.
+# Environment variables can be used: host: ${USENET_HOST}
+
+general:
+  download_dir: /downloads/incomplete
+  complete_dir: /downloads/complete
+  log_level: info
+
+servers:
+  - name: primary
+    host: news.example.com
+    port: 563
+    tls: true
+    username: ""
+    password: ""
+    connections: 10
+
+api:
+  listen: 0.0.0.0
+  port: 8080
+  api_key: ""
+`
+	if dir := filepath.Dir(path); dir != "." {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return err
 		}
-		if s.Port == 0 {
-			return fmt.Errorf("server %d: port is required", i)
-		}
 	}
-	return nil
+	return os.WriteFile(path, []byte(content), 0644)
 }

@@ -62,7 +62,8 @@ image-stop:
 
 ## clean: remove build artifacts
 clean:
-	rm -rf bin/ coverage.out coverage.html internal/webui/dist/
+	rm -rf bin/ coverage.out coverage.html
+	find internal/webui/dist -mindepth 1 ! -name .gitkeep -delete 2>/dev/null || true
 
 ## help: show this help
 help:

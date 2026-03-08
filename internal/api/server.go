@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -8,17 +10,22 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/phekno/gobin/internal/config"
+	"github.com/phekno/gobin/internal/nzb"
+	"github.com/phekno/gobin/internal/queue"
+	"gopkg.in/yaml.v3"
 )
 
-// Dependencies injected from main.
+// Server handles API requests.
 type Server struct {
-	// These would be interfaces in production for testability
-	// Queue   queue.ManagerInterface
-	// Config  *config.Config
-	apiKey   string
-	health   HealthChecker
-	staticFS fs.FS
-	mux      *http.ServeMux
+	health    HealthChecker
+	queue     *queue.Manager
+	configMgr *config.Manager
+	staticFS  fs.FS
+	mux       *http.ServeMux
+	startedAt time.Time
+	version   string
 }
 
 // HealthChecker is satisfied by health.Checker
@@ -27,19 +34,21 @@ type HealthChecker interface {
 	ReadinessHandler() http.HandlerFunc
 }
 
-func NewServer(apiKey string, health HealthChecker, staticFS fs.FS) *Server {
+func NewServer(health HealthChecker, queueMgr *queue.Manager, cfgMgr *config.Manager, staticFS fs.FS, version string) *Server {
 	s := &Server{
-		apiKey:   apiKey,
-		health:   health,
-		staticFS: staticFS,
-		mux:      http.NewServeMux(),
+		health:    health,
+		queue:     queueMgr,
+		configMgr: cfgMgr,
+		staticFS:  staticFS,
+		mux:       http.NewServeMux(),
+		startedAt: time.Now(),
+		version:   version,
 	}
 	s.registerRoutes()
 	return s
 }
 
 func (s *Server) registerRoutes() {
-	// Wrap all API routes with auth middleware
 	api := http.NewServeMux()
 
 	// Queue management
@@ -62,20 +71,20 @@ func (s *Server) registerRoutes() {
 	api.HandleFunc("GET /api/config", s.handleGetConfig)
 	api.HandleFunc("PUT /api/config", s.handleUpdateConfig)
 
-	// Status / stats
+	// Status
 	api.HandleFunc("GET /api/status", s.handleStatus)
 
-	// SSE for live updates
+	// SSE
 	api.HandleFunc("GET /api/events", s.handleSSE)
 
 	// Mount with auth
 	s.mux.Handle("/api/", s.authMiddleware(api))
 
-	// Health probes (unauthenticated — k8s needs access)
+	// Health probes (unauthenticated)
 	s.mux.HandleFunc("/healthz", s.health.LivenessHandler())
 	s.mux.HandleFunc("/readyz", s.health.ReadinessHandler())
 
-	// Static web UI (served from embedded files)
+	// Static web UI
 	if s.staticFS != nil {
 		s.mux.Handle("/", http.FileServer(http.FS(s.staticFS)))
 	} else {
@@ -87,7 +96,6 @@ func (s *Server) registerRoutes() {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Request logging
 	start := time.Now()
 	wrapped := &responseWriter{ResponseWriter: w, status: 200}
 	s.mux.ServeHTTP(wrapped, r)
@@ -99,7 +107,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	)
 }
 
-// ListenAndServe starts the HTTP server.
 func (s *Server) ListenAndServe(addr string) error {
 	srv := &http.Server{
 		Addr:         addr,
@@ -116,25 +123,62 @@ func (s *Server) ListenAndServe(addr string) error {
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.apiKey == "" {
+		cfg := s.configMgr.Get()
+		apiKey := cfg.API.APIKey
+		fwdAuth := cfg.API.ForwardAuth
+
+		// No auth configured at all
+		if apiKey == "" && !fwdAuth.Enabled {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		// Check header first, then query param
+		// Forward auth: trust headers set by reverse proxy (Authelia, Pocket ID, etc.)
+		if fwdAuth.Enabled {
+			user := r.Header.Get(fwdAuth.UserHeader)
+			if user != "" {
+				// Check group membership if configured
+				if len(fwdAuth.AllowedGroups) > 0 {
+					groups := r.Header.Get(fwdAuth.GroupsHeader)
+					if !hasAllowedGroup(groups, fwdAuth.AllowedGroups) {
+						writeJSON(w, http.StatusForbidden, map[string]string{
+							"error": "user not in allowed groups",
+						})
+						return
+					}
+				}
+				slog.Debug("forward auth", "user", user)
+				next.ServeHTTP(w, r)
+				return
+			}
+			// No user header — fall through to other auth methods
+		}
+
+		// Same-origin bypass for the embedded UI
+		if referer := r.Header.Get("Referer"); referer != "" {
+			if strings.HasPrefix(referer, "http://"+r.Host) || strings.HasPrefix(referer, "https://"+r.Host) {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+
+		// API key check (for external clients: Radarr, Sonarr, curl, etc.)
+		if apiKey == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		key := r.Header.Get("X-Api-Key")
 		if key == "" {
 			key = r.URL.Query().Get("apikey")
 		}
-		// Also support Bearer token
 		if key == "" {
-			auth := r.Header.Get("Authorization")
-			if strings.HasPrefix(auth, "Bearer ") {
-				key = strings.TrimPrefix(auth, "Bearer ")
+			if auth, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
+				key = auth
 			}
 		}
 
-		if key != s.apiKey {
+		if key != apiKey {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{
 				"error": "invalid or missing API key",
 			})
@@ -145,21 +189,70 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// --- Handlers (stubs — wire to real queue/config in production) ---
+func hasAllowedGroup(groupsHeader string, allowed []string) bool {
+	for _, g := range strings.Split(groupsHeader, ",") {
+		g = strings.TrimSpace(g)
+		for _, a := range allowed {
+			if strings.EqualFold(g, a) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// --- Job response DTO ---
+
+type jobResponse struct {
+	ID              string  `json:"id"`
+	Name            string  `json:"name"`
+	Category        string  `json:"category"`
+	Priority        int     `json:"priority"`
+	Status          string  `json:"status"`
+	Progress        float64 `json:"progress"`
+	AddedAt         string  `json:"added_at"`
+	TotalSegments   int     `json:"total_segments"`
+	DoneSegments    int64   `json:"done_segments"`
+	FailedSegments  int64   `json:"failed_segments"`
+	TotalBytes      int64   `json:"total_bytes"`
+	DownloadedBytes int64   `json:"downloaded_bytes"`
+}
+
+func jobToResponse(j *queue.Job) jobResponse {
+	return jobResponse{
+		ID:              j.ID,
+		Name:            j.Name,
+		Category:        j.Category,
+		Priority:        j.Priority,
+		Status:          j.Status.String(),
+		Progress:        j.Progress(),
+		AddedAt:         j.AddedAt.Format(time.RFC3339),
+		TotalSegments:   j.TotalSegments,
+		DoneSegments:    j.DoneSegments.Load(),
+		FailedSegments:  j.FailedSegments.Load(),
+		TotalBytes:      j.TotalBytes,
+		DownloadedBytes: j.DownloadedBytes.Load(),
+	}
+}
+
+// --- Handlers ---
 
 func (s *Server) handleGetQueue(w http.ResponseWriter, r *http.Request) {
-	// TODO: return m.queue.List()
+	jobs := s.queue.List()
+	resp := make([]jobResponse, len(jobs))
+	for i, j := range jobs {
+		resp[i] = jobToResponse(j)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"queue":    []any{},
-		"paused":   false,
-		"speed_bps": 0,
+		"queue":  resp,
+		"paused": s.queue.IsPaused(),
 	})
 }
 
 func (s *Server) handleAddToQueue(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name     string `json:"name"`
-		URL      string `json:"url,omitempty"`      // Fetch NZB from URL
+		URL      string `json:"url,omitempty"`
 		Category string `json:"category,omitempty"`
 		Priority int    `json:"priority,omitempty"`
 	}
@@ -167,36 +260,56 @@ func (s *Server) handleAddToQueue(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	// TODO: parse NZB, create job, add to queue
-	writeJSON(w, http.StatusAccepted, map[string]string{
+	if req.Name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
+		return
+	}
+
+	job := &queue.Job{
+		ID:       generateID(),
+		Name:     req.Name,
+		Category: req.Category,
+		Priority: req.Priority,
+	}
+	if err := s.queue.Add(job); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
 		"status": "added",
-		"id":     "placeholder-id",
+		"id":     job.ID,
+		"job":    jobToResponse(job),
 	})
 }
 
 func (s *Server) handleRemoveFromQueue(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	_ = id // TODO: m.queue.Remove(id)
-	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
+	if err := s.queue.Remove(id); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "removed", "id": id})
 }
 
 func (s *Server) handlePauseJob(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	_ = id // TODO: m.queue.Pause(id)
-	writeJSON(w, http.StatusOK, map[string]string{"status": "paused"})
+	s.queue.Pause(id)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "paused", "id": id})
 }
 
 func (s *Server) handleResumeJob(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	_ = id // TODO: m.queue.Resume(id)
-	writeJSON(w, http.StatusOK, map[string]string{"status": "resumed"})
+	s.queue.Resume(id)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "resumed", "id": id})
 }
 
 func (s *Server) handlePauseAll(w http.ResponseWriter, r *http.Request) {
+	s.queue.Pause("")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "queue paused"})
 }
 
 func (s *Server) handleResumeAll(w http.ResponseWriter, r *http.Request) {
+	s.queue.Resume("")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "queue resumed"})
 }
 
@@ -209,12 +322,10 @@ func (s *Server) handleDeleteHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleNZBUpload(w http.ResponseWriter, r *http.Request) {
-	// Handle multipart file upload
-	if err := r.ParseMultipartForm(32 << 20); err != nil { // 32MB max
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid upload"})
 		return
 	}
-
 	file, header, err := r.FormFile("nzbfile")
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing nzbfile"})
@@ -222,30 +333,88 @@ func (s *Server) handleNZBUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	_ = header // TODO: save to temp, parse NZB, create job
-	writeJSON(w, http.StatusAccepted, map[string]string{
+	parsed, err := nzb.Parse(file)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid NZB: " + err.Error()})
+		return
+	}
+
+	name := header.Filename
+	if title, ok := parsed.Meta["title"]; ok && title != "" {
+		name = title
+	}
+	name = strings.TrimSuffix(name, ".nzb")
+
+	job := &queue.Job{
+		ID:            generateID(),
+		Name:          name,
+		Category:      r.FormValue("category"),
+		TotalSegments: parsed.TotalSegments(),
+		TotalBytes:    parsed.TotalBytes(),
+	}
+	if err := s.queue.Add(job); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
 		"status":   "uploaded",
 		"filename": header.Filename,
+		"id":       job.ID,
+		"job":      jobToResponse(job),
 	})
 }
 
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
-	// TODO: return sanitized config (redact passwords)
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	cfg := s.configMgr.Get()
+	redacted := cfg.Redacted()
+
+	yamlBytes, err := yaml.Marshal(redacted)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to serialize config"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"config_yaml": string(yamlBytes),
+		"path":        s.configMgr.FilePath(),
+	})
 }
 
 func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+	var req struct {
+		ConfigYAML string `json:"config_yaml"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.ConfigYAML == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "config_yaml is required"})
+		return
+	}
+
+	var edited config.Config
+	if err := yaml.Unmarshal([]byte(req.ConfigYAML), &edited); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid YAML: " + err.Error()})
+		return
+	}
+
+	if err := s.configMgr.Update(&edited); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "config saved and reloaded"})
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	jobs := s.queue.List()
+	active := s.queue.ActiveJobs()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"version":     "0.1.0",
-		"uptime_secs": 0,
-		"speed_bps":   0,
-		"queue_size":  0,
-		"disk_free":   0,
-		"paused":      false,
+		"version":     s.version,
+		"uptime_secs": int(time.Since(s.startedAt).Seconds()),
+		"queue_size":  len(jobs),
+		"active":      len(active),
+		"paused":      s.queue.IsPaused(),
 	})
 }
 
@@ -255,13 +424,11 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
 		return
 	}
-
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	// Send heartbeat until client disconnects
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -269,8 +436,16 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
-			// TODO: send real queue status updates
-			fmt.Fprintf(w, "event: status\ndata: {\"speed_bps\": 0}\n\n")
+			jobs := s.queue.List()
+			resp := make([]jobResponse, len(jobs))
+			for i, j := range jobs {
+				resp[i] = jobToResponse(j)
+			}
+			data, _ := json.Marshal(map[string]any{
+				"queue":  resp,
+				"paused": s.queue.IsPaused(),
+			})
+			fmt.Fprintf(w, "event: queue\ndata: %s\n\n", data)
 			flusher.Flush()
 		}
 	}
@@ -282,6 +457,12 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+func generateID() string {
+	b := make([]byte, 8)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 type responseWriter struct {

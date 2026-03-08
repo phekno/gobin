@@ -19,7 +19,10 @@
       "Bash(npm install:*)",
       "Bash(npm run:*)",
       "Bash(make frontend:*)",
-      "Bash(pkill:*)"
+      "Bash(pkill:*)",
+      "Bash(gh run:*)",
+      "Bash(git add:*)",
+      "Bash(git stash:*)"
     ]
   }
 }

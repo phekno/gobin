@@ -33,7 +33,8 @@ bin/
 
 # Frontend
 web/node_modules/
-internal/webui/dist/
+internal/webui/dist/*
+!internal/webui/dist/.gitkeep
 
 # Editor/IDE
 # .idea/

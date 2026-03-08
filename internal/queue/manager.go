@@ -269,6 +269,13 @@ func (m *Manager) List() []*Job {
 	return result
 }
 
+// IsPaused returns whether the entire queue is paused.
+func (m *Manager) IsPaused() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.paused
+}
+
 // ActiveJobs returns jobs currently downloading.
 func (m *Manager) ActiveJobs() []*Job {
 	m.mu.RLock()

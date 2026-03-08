@@ -48,6 +48,7 @@ func main() {
 		slog.Error("failed to load config", "error", err)
 		os.Exit(1)
 	}
+	cfgMgr := config.NewManager(*configPath, cfg)
 
 	// Reconfigure logger with config-specified level
 	logger = logging.New(cfg.General.LogLevel, "main")
@@ -63,7 +64,6 @@ func main() {
 
 	// Queue manager
 	queueMgr := queue.NewManager(3) // max 3 concurrent downloads
-	_ = queueMgr                    // TODO: wire to download engine
 
 	// API server
 	apiAddr := fmt.Sprintf("%s:%d", cfg.API.Listen, cfg.API.Port)
@@ -71,14 +71,13 @@ func main() {
 	// Serve embedded frontend (falls back to placeholder if not built)
 	var staticFS fs.FS
 	if f, err := fs.Sub(webui.Assets, "dist"); err == nil {
-		// Check if the dist directory has any files
 		entries, _ := fs.ReadDir(f, ".")
 		if len(entries) > 0 {
 			staticFS = f
 		}
 	}
 
-	srv := api.NewServer(cfg.API.APIKey, checker, staticFS)
+	srv := api.NewServer(checker, queueMgr, cfgMgr, staticFS, version)
 
 	// Metrics server (separate port)
 	metricsMux := http.NewServeMux()
