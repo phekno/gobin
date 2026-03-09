@@ -18,7 +18,12 @@ import (
 	"github.com/phekno/gobin/internal/health"
 	"github.com/phekno/gobin/internal/logging"
 	"github.com/phekno/gobin/internal/metrics"
+	"github.com/phekno/gobin/internal/notify"
 	"github.com/phekno/gobin/internal/queue"
+	"github.com/phekno/gobin/internal/rss"
+	"github.com/phekno/gobin/internal/scheduler"
+	"github.com/phekno/gobin/internal/storage"
+	"github.com/phekno/gobin/internal/watcher"
 	"github.com/phekno/gobin/internal/webui"
 )
 
@@ -66,6 +71,16 @@ func main() {
 	// Queue manager
 	queueMgr := queue.NewManager(3) // max 3 concurrent downloads
 
+	// Open persistent storage
+	dbPath := cfg.General.DownloadDir + "/gobin.db"
+	store, err := storage.Open(dbPath)
+	if err != nil {
+		slog.Error("failed to open storage", "error", err, "path", dbPath)
+		os.Exit(1)
+	}
+	defer func() { _ = store.Close() }()
+	checker.Healthy("storage")
+
 	// API server
 	apiAddr := fmt.Sprintf("%s:%d", cfg.API.Listen, cfg.API.Port)
 
@@ -78,7 +93,11 @@ func main() {
 		}
 	}
 
-	srv := api.NewServer(checker, queueMgr, cfgMgr, staticFS, version)
+	// Download engine (created early so we can pass speed tracker to API)
+	notifier := notify.New(cfgMgr)
+	dl := engine.New(queueMgr, cfgMgr, store, notifier)
+
+	srv := api.NewServer(checker, queueMgr, cfgMgr, store, dl.Speed, staticFS, version)
 
 	// Metrics server (separate port)
 	metricsMux := http.NewServeMux()
@@ -86,9 +105,22 @@ func main() {
 	metricsAddr := "0.0.0.0:9090"
 
 	// Start download engine
-	dl := engine.New(queueMgr, cfgMgr)
 	go dl.Run(ctx)
 	checker.Healthy("engine")
+
+	// Start NZB watch directory
+	idGen := api.GenerateID
+	w := watcher.New(cfg.General.WatchDir, queueMgr, 10*time.Second, idGen)
+	go w.Run(ctx)
+
+	// Start RSS poller
+	rssPoller := rss.New(cfgMgr, queueMgr, idGen)
+	go rssPoller.Run(ctx)
+
+	// Start speed scheduler
+	sched := scheduler.New(cfgMgr)
+	go sched.Run(ctx)
+	_ = sched // TODO: wire speed limit into engine
 
 	// Start health checks
 	go checker.StartPeriodicChecks(ctx, 15*time.Second)

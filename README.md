@@ -1,6 +1,11 @@
 # GoBin — A Modern Usenet Binary Downloader
 
-GoBin is a from-scratch replacement for [SABnzbd](https://sabnzbd.org) written in Go. It is designed to be cloud-native, running comfortably in a Kubernetes cluster alongside other homelab services, while remaining simple enough to run standalone via Docker Compose.
+[![CI](https://github.com/phekno/gobin/actions/workflows/ci.yaml/badge.svg)](https://github.com/phekno/gobin/actions/workflows/ci.yaml)
+[![Release](https://github.com/phekno/gobin/actions/workflows/release.yaml/badge.svg)](https://github.com/phekno/gobin/actions/workflows/release.yaml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/phekno/gobin)](https://goreportcard.com/report/github.com/phekno/gobin)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+GoBin is a from-scratch replacement for [SABnzbd](https://sabnzbd.org) written in Go. It is designed to be cloud-native, running comfortably in a Kubernetes cluster alongside other homelab services, while remaining simple enough to run standalone via Docker or Podman.
 
 **Repository:** [github.com/phekno/gobin](https://github.com/phekno/gobin)
 **License:** MIT
@@ -32,7 +37,7 @@ Go was chosen deliberately over Python, Rust, and other candidates:
 
 - **Concurrency model**: Goroutines and channels are a natural fit for a download manager. Each NNTP connection runs in its own goroutine. Segment fetching, yEnc decoding, and disk assembly can all run as concurrent pipeline stages connected by channels.
 - **Single binary deployment**: `CGO_ENABLED=0 go build` produces a static binary with zero runtime dependencies. The Docker image is Alpine-based and around 50MB (vs. SABnzbd's Python + pip dependencies).
-- **Standard library strength**: Go's stdlib covers HTTP servers, XML parsing, TLS, JSON, and structured logging (`log/slog`). The only external dependency is `gopkg.in/yaml.v3`.
+- **Standard library strength**: Go's stdlib covers HTTP servers, XML parsing, TLS, JSON, and structured logging (`log/slog`). External dependencies are minimal: `gopkg.in/yaml.v3` for config and `go.etcd.io/bbolt` for persistent state.
 - **Ecosystem fit**: Most Kubernetes tooling, many homelab projects, and the container ecosystem are Go. It's a natural language for this domain.
 
 ### Why roll our own core libraries?
@@ -47,7 +52,7 @@ Three critical components are implemented from scratch rather than using externa
 
 ### Post-processing: shell out, don't reimplement
 
-PAR2 repair and archive extraction are handled by shelling out to mature C tools (`par2cmdline`, `unrar`, `7z`) rather than reimplementing them in Go. These tools are battle-tested and bundled in the Docker image. The `internal/postprocess/` package (not yet fully implemented) orchestrates the pipeline: verify → repair → unpack → rename → cleanup → notify.
+PAR2 repair and archive extraction are handled by shelling out to mature C tools (`par2cmdline`, `7z`) rather than reimplementing them in Go. These tools are battle-tested and bundled in the Docker image. The `internal/postprocess/` package orchestrates the pipeline: PAR2 verify → repair → 7z extract → cleanup.
 
 ### Configuration: single YAML file with env var expansion
 
@@ -57,7 +62,7 @@ The config is loaded and validated at startup with sane defaults (port 8080, 3 r
 
 ### Metrics: stdlib stubs with Prometheus upgrade path
 
-The current metrics implementation uses `sync/atomic` counters exposed as JSON on `:9090/metrics`. This was a pragmatic choice to keep the dependency tree minimal during initial development. The metric names and structure already follow Prometheus naming conventions (`gobin_download_bytes_total`, `gobin_nntp_command_duration_seconds`, etc.), so upgrading to `prometheus/client_golang` is a mechanical find-and-replace. The Grafana dashboard JSON is already written against the Prometheus metric names.
+The metrics implementation uses `sync/atomic` counters exposed in Prometheus text format on `:9090/metrics`. Metric names follow Prometheus conventions (`gobin_download_bytes_total`, `gobin_download_speed_bps`, `gobin_nntp_connections_active`, etc.). Upgrading to `prometheus/client_golang` for histograms is a mechanical find-and-replace. The Grafana dashboard JSON is already written against these metric names.
 
 ---
 
@@ -79,12 +84,13 @@ Key k8s design choices:
 
 ### Docker image
 
-The Dockerfile is a multi-stage build:
+The Dockerfile is a three-stage build:
 
-1. **Builder stage**: Compiles the Go binary with `CGO_ENABLED=0` for a static build. Accepts `VERSION` and `COMMIT` build args for stamping.
-2. **Runtime stage**: Alpine 3.19 with `par2cmdline` and `7zip` installed. Runs as non-root user (UID 1000). `7zip` handles both RAR and 7z extraction.
+1. **Frontend stage**: Node 24 Alpine builds the React UI via Vite.
+2. **Builder stage**: Go 1.25 Alpine compiles the binary with `CGO_ENABLED=0` and embeds the built frontend.
+3. **Runtime stage**: Alpine 3.23 with `par2cmdline` and `7zip` installed. Runs as non-root user (UID 1000).
 
-The image exposes two ports: 8080 (API/UI) and 9090 (metrics).
+The image exposes two ports: 8080 (API/UI) and 9090 (metrics). Persistent state (bbolt database) is stored in the downloads volume.
 
 ### Structured logging
 
@@ -114,18 +120,17 @@ Two GitHub Actions workflows:
 
 ### CI (`ci.yaml`) — runs on push to main and PRs
 
-1. **Test**: `go test ./... -v -race -count=1` with coverage upload to Codecov.
+1. **Test**: `go test ./... -v -race` with coverage upload to Codecov.
 2. **Lint**: `golangci-lint` for static analysis.
-3. **Frontend**: `npm ci && npm run build` in the `web/` directory.
-4. **Build**: Cross-compile for `linux/amd64` and `linux/arm64` to verify the binary compiles on both architectures.
+3. **Build**: Frontend build (Vite) + Go compile for `linux/amd64`.
+4. **Trivy FS scan**: Scans Go dependencies for CRITICAL/HIGH vulnerabilities.
+5. **Trivy image scan**: Builds the Docker image and scans for OS + library vulnerabilities.
 
 ### Release (`release.yaml`) — runs on `v*` tags
 
 1. **Test**: Full test suite as a gate.
-2. **Frontend build**: Produces the static assets.
-3. **Docker**: Multi-arch build via `docker/buildx-action` with QEMU. Pushes to GHCR (`ghcr.io/phekno/gobin`) with semver tags (`0.1.0`, `0.1`, `0`, `latest`, plus the Git SHA).
-4. **GitHub Release**: Attaches `linux/amd64` and `linux/arm64` binaries. Generates a changelog from commit messages since the previous tag.
-5. **Flux notify**: Dispatches a `repository_dispatch` event to the GitOps repo so Flux can pick up the new image tag. (Alternatively, Flux image automation can be used for fully automated tag bumps.)
+2. **Docker**: Builds the image (Dockerfile includes its own frontend stage), scans with Trivy, then pushes to GHCR (`ghcr.io/phekno/gobin`) with semver tags and digest.
+3. **GitHub Release**: Builds a `linux/amd64` binary, generates a changelog, and creates a GitHub Release with Docker pull instructions (by tag and by digest).
 
 ---
 
@@ -134,83 +139,80 @@ Two GitHub Actions workflows:
 ```
 gobin/
 ├── cmd/gobin/
-│   └── main.go                     # Entry point — wires config, queue, API, health, metrics
+│   └── main.go                     # Entry point — wires all components
 │
 ├── internal/
-│   ├── config/
-│   │   ├── config.go               # YAML config parsing, env var expansion, validation, defaults
-│   │   └── config_test.go          # Tests: loading, defaults, env expansion, validation errors
-│   │
-│   ├── nzb/
-│   │   ├── parser.go               # NZB XML parser, segment sorting, filename extraction
-│   │   └── parser_test.go          # Tests: parsing, filenames, byte/segment totals, empty NZB
-│   │
-│   ├── nntp/
-│   │   └── client.go               # NNTP client (TLS, auth, BODY command, dot-stuffing)
-│   │                                # Connection pool (Get/Put, health checks, auto-reconnect)
-│   │
-│   ├── decoder/
-│   │   ├── yenc.go                 # yEnc single/multi-part decoder, CRC32 validation
-│   │   └── yenc_test.go            # Tests: basic decode, escape sequences, multipart, field extraction
-│   │
-│   ├── queue/
-│   │   ├── manager.go              # Job queue: add/remove/pause/resume, priority ordering
-│   │   │                            # Atomic progress counters, sliding-window speed tracker
-│   │   └── manager_test.go         # Tests: CRUD, duplicates, pause/resume, priority, progress
-│   │
 │   ├── api/
-│   │   └── server.go               # HTTP API (Go 1.22 routing), SSE, auth middleware
-│   │                                # Health probes mounted outside auth
-│   │
+│   │   ├── server.go               # HTTP API, SSE, auth middleware (forward auth + API key)
+│   │   ├── sabnzbd.go              # SABnzbd API compatibility layer for *arr apps
+│   │   └── *_test.go
+│   ├── assembler/
+│   │   └── assembler.go            # Writes decoded segments to files, moves to output dir
+│   ├── config/
+│   │   ├── config.go               # YAML config parsing, env var expansion, validation
+│   │   ├── manager.go              # Thread-safe config with hot-reload and persistence
+│   │   └── *_test.go
+│   ├── decoder/
+│   │   ├── yenc.go                 # yEnc decoder, CRC32 validation
+│   │   └── *_test.go
+│   ├── engine/
+│   │   └── engine.go               # Download pipeline: queue → NNTP → decode → assemble → post-process
+│   ├── health/
+│   │   ├── health.go               # Liveness/readiness probes
+│   │   └── *_test.go
 │   ├── logging/
-│   │   └── logging.go              # slog JSON logger, context propagation, job/trace enrichment
-│   │                                # Lifecycle log functions (download.start, .progress, .complete)
-│   │
+│   │   ├── logging.go              # slog JSON logger, context propagation, lifecycle events
+│   │   └── *_test.go
 │   ├── metrics/
-│   │   └── metrics.go              # sync/atomic counters (Prometheus upgrade path documented)
-│   │
-│   └── health/
-│       └── health.go               # Liveness (/healthz) and readiness (/readyz) probes
-│                                    # Per-component status tracking
+│   │   ├── metrics.go              # Prometheus-compatible counters and gauges
+│   │   └── *_test.go
+│   ├── nntp/
+│   │   ├── client.go               # NNTP client + connection pool
+│   │   └── *_test.go
+│   ├── notify/
+│   │   └── notify.go               # Webhook notifications (Discord, Slack, generic)
+│   ├── nzb/
+│   │   ├── parser.go               # NZB XML parser
+│   │   └── *_test.go
+│   ├── postprocess/
+│   │   └── postprocess.go          # PAR2 verify/repair → 7z extract → cleanup
+│   ├── queue/
+│   │   ├── manager.go              # Job queue with priority, pause/resume, speed tracking
+│   │   └── *_test.go
+│   ├── rss/
+│   │   └── rss.go                  # RSS feed polling with regex filters
+│   ├── scheduler/
+│   │   └── scheduler.go            # Time-based speed limiting
+│   ├── storage/
+│   │   └── storage.go              # bbolt persistent state (queue + history)
+│   ├── watcher/
+│   │   └── watcher.go              # Watch directory for auto-adding NZB files
+│   └── webui/
+│       └── webui.go                # go:embed for built frontend assets
 │
-├── deploy/
-│   └── grafana/
-│       ├── gobin-dashboard.json     # 15-panel Grafana dashboard
-│       └── dashboard-configmap.yaml # Auto-provisioning via sidecar label
+├── web/                             # React frontend (Vite)
+│   ├── src/App.jsx                  # Dark-mode UI with queue, history, config editor
+│   └── ...
 │
+├── deploy/grafana/                  # Grafana dashboard JSON
 ├── .github/workflows/
-│   ├── ci.yaml                      # Test + lint + build on push/PR
-│   └── release.yaml                 # Multi-arch Docker → GHCR + GitHub Release on v* tag
+│   ├── ci.yaml                      # Test + lint + build + Trivy scan
+│   └── release.yaml                 # Docker → GHCR + GitHub Release on v* tag
 │
-├── Dockerfile                       # Multi-stage: Go build → Alpine runtime with tini, par2, unrar, 7z
-├── docker-compose.yml               # Simple local deployment
-├── Makefile                         # build, run, test, cover, lint, docker, frontend, clean
-├── go.mod                           # Module: github.com/phekno/gobin — single dep: gopkg.in/yaml.v3
-├── config.example.yaml              # Full annotated example config
-├── setup.sh                         # One-command local dev setup (prereqs, build, test)
-├── .gitignore
-└── LICENSE                          # MIT
+├── Dockerfile                       # Multi-stage: Node → Go → Alpine with par2 + 7z
+├── docker-compose.yml
+├── Makefile
+├── go.mod
+├── config.example.yaml
+├── renovate.json
+└── LICENSE
 ```
-
----
-
-## Packages Not Yet Implemented
-
-The following packages are referenced in the architecture but do not yet have code. They represent the next phases of development:
-
-- **`internal/assembler/`**: Reassembles decoded yEnc segments into complete files. Needs a buffered disk writer that handles temp files and atomic renames.
-- **`internal/postprocess/`**: Orchestrates the post-download pipeline: PAR2 verify → repair → unrar/7z extract → obfuscation rename → cleanup → script execution → notification.
-- **`internal/scheduler/`**: Speed limits, time-window scheduling (e.g., limit to 50 MB/s during work hours), bandwidth management.
-- **`internal/rss/`**: RSS feed polling with regex/category-based filters for automatic NZB addition.
-- **`internal/notify/`**: Notification dispatcher for webhooks (Discord, Slack, generic) and Apprise integration.
-- **`internal/storage/`**: Persistent state via SQLite or bbolt for download history, queue state across restarts, and schema migrations.
-- **`web/`**: React frontend using Material UI with dark mode. A prototype UI exists as a standalone JSX artifact but has not been integrated into the build. The Go binary will serve it via `go:embed`.
 
 ---
 
 ## API
 
-All API endpoints (except health probes) require authentication via `X-Api-Key` header, `?apikey=` query parameter, or `Authorization: Bearer` header.
+API endpoints support multiple auth methods: forward auth headers (Authelia/Pocket ID), same-origin bypass (embedded UI), `X-Api-Key` header, `?apikey=` query parameter, or `Authorization: Bearer` header.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -231,6 +233,7 @@ All API endpoints (except health probes) require authentication via `X-Api-Key` 
 | `GET` | `/healthz` | Liveness probe (no auth) |
 | `GET` | `/readyz` | Readiness probe with per-component status (no auth) |
 | `GET` | `:9090/metrics` | Prometheus-compatible metrics (separate port) |
+| `GET/POST` | `/sabnzbd/api` | SABnzbd-compatible API for Sonarr/Radarr/Lidarr |
 
 ---
 
@@ -243,8 +246,8 @@ See `config.example.yaml` for the complete annotated configuration. Key sections
 - **`categories`**: Map category names to output subdirectories and post-processing scripts.
 - **`downloads`**: Retry count, article cache size, temp directory, speed limit.
 - **`schedule`**: Time-based speed limiting (e.g., slower during work hours).
-- **`postprocess`**: Paths to par2/unrar/7z binaries, cleanup toggle, script directory.
-- **`api`**: Listen address, port, API key, base URL (for reverse proxy subpaths), CORS origins.
+- **`postprocess`**: PAR2 verify/repair, 7z extraction, cleanup toggle, script directory.
+- **`api`**: Listen address, port, API key, forward auth (Authelia/Pocket ID), CORS origins.
 - **`notifications`**: Webhook URLs with Go template payloads.
 - **`rss`**: Feed URLs with include/exclude regex filters per category.
 
@@ -252,7 +255,7 @@ See `config.example.yaml` for the complete annotated configuration. Key sections
 
 ## Running with Docker
 
-The quickest way to run GoBin:
+The quickest way to run GoBin. If no config file is found, GoBin creates a default one automatically.
 
 ```bash
 # 1. Create a config directory and copy the example config
@@ -302,7 +305,7 @@ chmod +x setup.sh
 ./setup.sh
 ```
 
-The setup script checks for Go 1.22+, runs `go mod tidy`, builds the binary, runs all tests with the race detector, runs `go vet`, and creates local config/download directories.
+The setup script checks for Go 1.25+, runs `go mod tidy`, builds the binary, runs all tests with the race detector, runs `go vet`, and creates local config/download directories.
 
 To run locally after setup:
 
@@ -323,24 +326,23 @@ Other useful make targets:
 make test       # run tests with race detector
 make cover      # tests + coverage report (coverage.html)
 make lint       # golangci-lint
-make docker     # build Docker image
+make image      # build container image (auto-detects podman/docker)
+make image-run  # build + run the container
+make frontend   # build the React UI only
 make help       # list all targets
 ```
 
 ---
 
-## Suggested Development Order
+## *arr Integration
 
-For anyone picking this up (including Claude Code):
+GoBin is compatible with Sonarr, Radarr, and Lidarr via the SABnzbd API at `/sabnzbd/api`. To add GoBin as a download client:
 
-1. **Get tests green**: Run `go mod tidy && go test ./... -v -race`. Fix any issues. The existing tests cover config loading, NZB parsing, yEnc decoding, and queue management.
-2. **Assembler**: Implement `internal/assembler/` to stitch decoded segments into files on disk. This is the glue between the decoder and the filesystem.
-3. **Download engine**: Wire up the NNTP client pool + NZB parser + decoder + assembler into a download pipeline. Fetch a real NZB end-to-end.
-4. **Post-processing**: Implement `internal/postprocess/` — shell out to par2/unrar/7z.
-5. **Persistent state**: Add SQLite or bbolt for queue state and history that survives restarts.
-6. **Web UI**: Integrate the React frontend via `go:embed`.
-7. **RSS + notifications**: Add automated NZB fetching and completion alerts.
-8. **Prometheus upgrade**: Replace `sync/atomic` metrics with `prometheus/client_golang`.
+1. In Sonarr/Radarr: **Settings → Download Clients → Add → SABnzbd**
+2. **Host**: your GoBin host (e.g., `gobin.downloads.svc.cluster.local`)
+3. **Port**: `8080`
+4. **API Key**: your GoBin API key from `config.yaml`
+5. **Category**: `tv`, `movies`, etc. (must match a configured category)
 
 ---
 
@@ -348,19 +350,22 @@ For anyone picking this up (including Claude Code):
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Language | Go 1.22 | Concurrency, single binary, stdlib, ecosystem fit |
+| Language | Go 1.25 | Concurrency, single binary, stdlib, ecosystem fit |
 | Config format | YAML | Human-readable, env var expansion, k8s native |
 | Logging | `log/slog` (JSON) | Stdlib, structured, Loki/ELK-ready |
-| HTTP framework | Go stdlib (`net/http`) | Go 1.22 routing is sufficient, zero dependencies |
-| Metrics | `sync/atomic` (stub) → `prometheus/client_golang` | Minimal deps now, clear upgrade path |
+| HTTP framework | Go stdlib (`net/http`) | Go 1.22+ routing is sufficient, zero dependencies |
+| Metrics | `sync/atomic` (Prometheus-compatible) | Minimal deps, clear upgrade path to `prometheus/client_golang` |
+| Persistent state | bbolt | Pure Go, single-file DB, no CGO needed |
+| Frontend | React + Vite | Fast builds, embedded via `go:embed` |
 | NZB parsing | Custom | Simple format, full control, zero deps |
 | NNTP client | Custom | Full control over pooling, TLS, buffers |
 | yEnc decoder | Custom | Performance-critical hot path, abandoned alternatives |
 | PAR2/unpack | Shell out to `par2cmdline`, `7z` | Mature C tools, not worth reimplementing |
-| Container base | Alpine 3.19 | Small, has par2/7zip packages |
+| *arr integration | SABnzbd API compat | Works with Sonarr/Radarr/Lidarr out of the box |
+| Auth | Forward auth + API key | Authelia/Pocket ID via reverse proxy, API key for clients |
+| Container base | Alpine 3.23 | Small, has par2/7zip packages |
 | Helm chart | bjw-s app-template v4 (in cluster repo) | Homelab community standard |
 | GitOps | Flux CD (in cluster repo) | Already running on target cluster |
-| CI/CD | GitHub Actions | Repo is on GitHub, native integration |
+| CI/CD | GitHub Actions + Trivy | Test, lint, build, security scan |
 | Container registry | GHCR | Free for public repos, native to GitHub |
-| Secret management | SOPS or ExternalSecret | Both supported, user's choice |
 | License | MIT | Personal project, no restrictions needed |

@@ -13,6 +13,7 @@ import (
 
 	"github.com/phekno/gobin/internal/config"
 	"github.com/phekno/gobin/internal/queue"
+	"github.com/phekno/gobin/internal/storage"
 )
 
 type mockHealthChecker struct{}
@@ -37,13 +38,24 @@ func testConfigMgr(t *testing.T, cfg *config.Config) *config.Manager {
 	return config.NewManager(path, cfg)
 }
 
+func testStore(t *testing.T) *storage.Store {
+	t.Helper()
+	s, err := storage.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("opening test store: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
+
 func newTestServer(apiKey string) *Server {
 	dir, _ := os.MkdirTemp("", "gobin-test-*")
 	cfgMgr := config.NewManager(filepath.Join(dir, "config.yaml"), &config.Config{
 		API:     config.API{APIKey: apiKey, Port: 8080},
 		General: config.General{DownloadDir: dir + "/downloads", CompleteDir: dir + "/complete"},
 	})
-	return NewServer(&mockHealthChecker{}, queue.NewManager(3), cfgMgr, nil, "test")
+	s, _ := storage.Open(filepath.Join(dir, "test.db"))
+	return NewServer(&mockHealthChecker{}, queue.NewManager(3), cfgMgr, s, nil, nil, "test")
 }
 
 func TestAuthMiddleware_NoAPIKey(t *testing.T) {
@@ -304,7 +316,7 @@ func TestAuthMiddleware_ForwardAuth_ValidUser(t *testing.T) {
 			ForwardAuth: config.ForwardAuth{Enabled: true, UserHeader: "Remote-User"},
 		},
 	})
-	srv := NewServer(&mockHealthChecker{}, queue.NewManager(3), cfgMgr, nil, "test")
+	srv := NewServer(&mockHealthChecker{}, queue.NewManager(3), cfgMgr, testStore(t), nil, nil, "test")
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/api/queue", nil)
@@ -323,7 +335,7 @@ func TestAuthMiddleware_ForwardAuth_NoUserHeader(t *testing.T) {
 			ForwardAuth: config.ForwardAuth{Enabled: true, UserHeader: "Remote-User"},
 		},
 	})
-	srv := NewServer(&mockHealthChecker{}, queue.NewManager(3), cfgMgr, nil, "test")
+	srv := NewServer(&mockHealthChecker{}, queue.NewManager(3), cfgMgr, testStore(t), nil, nil, "test")
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/api/queue", nil)
@@ -347,7 +359,7 @@ func TestAuthMiddleware_ForwardAuth_GroupAllowed(t *testing.T) {
 			},
 		},
 	})
-	srv := NewServer(&mockHealthChecker{}, queue.NewManager(3), cfgMgr, nil, "test")
+	srv := NewServer(&mockHealthChecker{}, queue.NewManager(3), cfgMgr, testStore(t), nil, nil, "test")
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/api/queue", nil)
@@ -372,7 +384,7 @@ func TestAuthMiddleware_ForwardAuth_GroupDenied(t *testing.T) {
 			},
 		},
 	})
-	srv := NewServer(&mockHealthChecker{}, queue.NewManager(3), cfgMgr, nil, "test")
+	srv := NewServer(&mockHealthChecker{}, queue.NewManager(3), cfgMgr, testStore(t), nil, nil, "test")
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/api/queue", nil)
@@ -392,7 +404,7 @@ func TestAuthMiddleware_ForwardAuth_FallbackToAPIKey(t *testing.T) {
 			ForwardAuth: config.ForwardAuth{Enabled: true, UserHeader: "Remote-User"},
 		},
 	})
-	srv := NewServer(&mockHealthChecker{}, queue.NewManager(3), cfgMgr, nil, "test")
+	srv := NewServer(&mockHealthChecker{}, queue.NewManager(3), cfgMgr, testStore(t), nil, nil, "test")
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/api/queue", nil)
@@ -414,7 +426,7 @@ func TestHandleGetConfig_ReturnsRedactedYAML(t *testing.T) {
 			{Name: "test", Host: "news.example.com", Port: 563, Password: "mypass"},
 		},
 	})
-	srv := NewServer(&mockHealthChecker{}, queue.NewManager(3), cfgMgr, nil, "test")
+	srv := NewServer(&mockHealthChecker{}, queue.NewManager(3), cfgMgr, testStore(t), nil, nil, "test")
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/api/config", nil)
@@ -449,7 +461,7 @@ func TestHandleUpdateConfig_ValidYAML(t *testing.T) {
 			{Name: "test", Host: "news.example.com", Port: 563, Password: "original"},
 		},
 	})
-	srv := NewServer(&mockHealthChecker{}, queue.NewManager(3), cfgMgr, nil, "test")
+	srv := NewServer(&mockHealthChecker{}, queue.NewManager(3), cfgMgr, testStore(t), nil, nil, "test")
 
 	newYAML := `
 servers:
@@ -482,7 +494,7 @@ api:
 
 func TestHandleUpdateConfig_InvalidYAML(t *testing.T) {
 	cfgMgr := testConfigMgr(t, &config.Config{API: config.API{Port: 8080}})
-	srv := NewServer(&mockHealthChecker{}, queue.NewManager(3), cfgMgr, nil, "test")
+	srv := NewServer(&mockHealthChecker{}, queue.NewManager(3), cfgMgr, testStore(t), nil, nil, "test")
 
 	rec := httptest.NewRecorder()
 	body := map[string]string{"config_yaml": ": invalid: yaml: ["}
@@ -503,7 +515,7 @@ func TestHandleUpdateConfig_PreservesRedactedSecrets(t *testing.T) {
 			{Name: "test", Host: "news.example.com", Port: 563, Password: "real-password"},
 		},
 	})
-	srv := NewServer(&mockHealthChecker{}, queue.NewManager(3), cfgMgr, nil, "test")
+	srv := NewServer(&mockHealthChecker{}, queue.NewManager(3), cfgMgr, testStore(t), nil, nil, "test")
 
 	editedYAML := `
 servers:

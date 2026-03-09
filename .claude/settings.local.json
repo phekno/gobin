@@ -28,7 +28,8 @@
       "Bash(echo exit: $?:*)",
       "WebSearch",
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:forums.sabnzbd.org)"
+      "WebFetch(domain:forums.sabnzbd.org)",
+      "Bash(go get:*)"
     ]
   }
 }

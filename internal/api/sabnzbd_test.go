@@ -22,7 +22,7 @@ func newSABTestServer(t *testing.T, apiKey string) *Server {
 			{Name: "primary", Host: "news.example.com", Port: 563, TLS: true, Connections: 10},
 		},
 	})
-	return NewServer(&mockHealthChecker{}, queue.NewManager(3), cfgMgr, nil, "0.1.0")
+	return NewServer(&mockHealthChecker{}, queue.NewManager(3), cfgMgr, testStore(t), nil, nil, "0.1.0")
 }
 
 func TestSAB_Version_NoAuth(t *testing.T) {

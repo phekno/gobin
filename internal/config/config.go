@@ -72,7 +72,6 @@ type PostProcess struct {
 	Par2Enabled        bool   `yaml:"par2_enabled"`
 	Par2Path           string `yaml:"par2_path"`
 	UnpackEnabled      bool   `yaml:"unpack_enabled"`
-	UnrarPath          string `yaml:"unrar_path"`
 	SevenzPath         string `yaml:"sevenz_path"`
 	CleanupAfterUnpack bool   `yaml:"cleanup_after_unpack"`
 	ScriptDir          string `yaml:"script_dir"`
@@ -262,6 +261,13 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Downloads.MaxRetries == 0 {
 		cfg.Downloads.MaxRetries = 3
+	}
+	// Post-processing tool paths
+	if cfg.PostProcess.Par2Path == "" {
+		cfg.PostProcess.Par2Path = "par2"
+	}
+	if cfg.PostProcess.SevenzPath == "" {
+		cfg.PostProcess.SevenzPath = "7z"
 	}
 	// Forward auth header defaults
 	if cfg.API.ForwardAuth.Enabled {

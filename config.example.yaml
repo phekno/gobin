@@ -2,6 +2,7 @@
 # Copy to config.yaml and edit to match your setup.
 
 # --- General ---
+# The database (gobin.db) is stored in download_dir for persistence.
 general:
   download_dir: /downloads/incomplete    # Active downloads go here
   complete_dir: /downloads/complete      # Finished downloads moved here
@@ -66,16 +67,19 @@ schedule:
       speed_limit_kbps: 50000            # 50 MB/s during work hours
 
 # --- Post-Processing ---
+# Runs after download completes: PAR2 verify/repair → extract archives → cleanup.
 postprocess:
   par2_enabled: true
-  par2_path: /usr/bin/par2                # Path to par2cmdline binary
+  par2_path: par2                        # Path to par2cmdline binary (in PATH by default)
   unpack_enabled: true
-  unrar_path: /usr/bin/unrar
-  sevenz_path: /usr/bin/7z
-  cleanup_after_unpack: true             # Remove .rar/.par2 after success
+  sevenz_path: 7z                        # 7zip handles RAR, 7z, and zip extraction
+  cleanup_after_unpack: true             # Remove .rar/.par2/.7z after success
   script_dir: /config/scripts            # Custom post-processing scripts
 
 # --- Web UI / API ---
+# The embedded UI is served at / and does not require an API key.
+# External clients (Sonarr, Radarr, curl) use the API key.
+# SABnzbd-compatible API is available at /sabnzbd/api for *arr integration.
 api:
   listen: 0.0.0.0
   port: 8080

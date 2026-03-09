@@ -18,6 +18,7 @@ import (
 	"github.com/phekno/gobin/internal/config"
 	"github.com/phekno/gobin/internal/nzb"
 	"github.com/phekno/gobin/internal/queue"
+	"github.com/phekno/gobin/internal/storage"
 	"gopkg.in/yaml.v3"
 )
 
@@ -26,6 +27,8 @@ type Server struct {
 	health    HealthChecker
 	queue     *queue.Manager
 	configMgr *config.Manager
+	store     *storage.Store
+	speed     *queue.SpeedTracker
 	staticFS  fs.FS
 	mux       *http.ServeMux
 	startedAt time.Time
@@ -38,11 +41,13 @@ type HealthChecker interface {
 	ReadinessHandler() http.HandlerFunc
 }
 
-func NewServer(health HealthChecker, queueMgr *queue.Manager, cfgMgr *config.Manager, staticFS fs.FS, version string) *Server {
+func NewServer(health HealthChecker, queueMgr *queue.Manager, cfgMgr *config.Manager, store *storage.Store, speed *queue.SpeedTracker, staticFS fs.FS, version string) *Server {
 	s := &Server{
 		health:    health,
 		queue:     queueMgr,
 		configMgr: cfgMgr,
+		store:     store,
+		speed:     speed,
 		staticFS:  staticFS,
 		mux:       http.NewServeMux(),
 		startedAt: time.Now(),
@@ -274,7 +279,7 @@ func (s *Server) handleAddToQueue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	job := &queue.Job{
-		ID:       generateID(),
+		ID:       GenerateID(),
 		Name:     req.Name,
 		Category: req.Category,
 		Priority: req.Priority,
@@ -321,11 +326,24 @@ func (s *Server) handleResumeAll(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "queue resumed"})
 }
 
-func (s *Server) handleGetHistory(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"history": []any{}})
+func (s *Server) handleGetHistory(w http.ResponseWriter, _ *http.Request) {
+	entries, err := s.store.ListHistory(100)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if entries == nil {
+		entries = []*storage.HistoryEntry{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"history": entries})
 }
 
 func (s *Server) handleDeleteHistory(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.store.DeleteHistory(id); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
@@ -368,7 +386,7 @@ func (s *Server) handleNZBUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	job := &queue.Job{
-		ID:            generateID(),
+		ID:            GenerateID(),
 		Name:          name,
 		NZBPath:       nzbPath,
 		Category:      r.FormValue("category"),
@@ -429,15 +447,20 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "config saved and reloaded"})
 }
 
-func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	jobs := s.queue.List()
 	active := s.queue.ActiveJobs()
+	var speedBps float64
+	if s.speed != nil {
+		speedBps = s.speed.BytesPerSecond()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version":     s.version,
 		"uptime_secs": int(time.Since(s.startedAt).Seconds()),
 		"queue_size":  len(jobs),
 		"active":      len(active),
 		"paused":      s.queue.IsPaused(),
+		"speed_bps":   int64(speedBps),
 	})
 }
 
@@ -464,9 +487,14 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 			for i, j := range jobs {
 				resp[i] = jobToResponse(j)
 			}
+			var speedBps float64
+			if s.speed != nil {
+				speedBps = s.speed.BytesPerSecond()
+			}
 			data, _ := json.Marshal(map[string]any{
-				"queue":  resp,
-				"paused": s.queue.IsPaused(),
+				"queue":     resp,
+				"paused":    s.queue.IsPaused(),
+				"speed_bps": int64(speedBps),
 			})
 			_, _ = fmt.Fprintf(w, "event: queue\ndata: %s\n\n", data)
 			flusher.Flush()
@@ -496,7 +524,8 @@ func (s *Server) saveNZB(name string, data []byte) (string, error) {
 	return path, nil
 }
 
-func generateID() string {
+// GenerateID creates a random hex ID for jobs.
+func GenerateID() string {
 	b := make([]byte, 8)
 	rand.Read(b)
 	return hex.EncodeToString(b)

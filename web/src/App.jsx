@@ -55,6 +55,21 @@ function formatBytes(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
 }
 
+function formatSpeed(bps) {
+  if (!bps || bps === 0) return "—";
+  return formatBytes(bps) + "/s";
+}
+
+function formatETA(remainingBytes, speedBps) {
+  if (!speedBps || speedBps <= 0 || !remainingBytes) return "—";
+  const secs = remainingBytes / speedBps;
+  if (secs < 60) return `${Math.round(secs)}s`;
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ${Math.round(secs % 60)}s`;
+  const hrs = Math.floor(secs / 3600);
+  const mins = Math.floor((secs % 3600) / 60);
+  return `${hrs}h ${mins}m`;
+}
+
 function timeAgo(dateStr) {
   if (!dateStr) return "";
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -304,6 +319,9 @@ export default function GoBinUI() {
         const data = JSON.parse(e.data);
         setQueueData(data.queue || []);
         setQueuePaused(data.paused || false);
+        if (data.speed_bps !== undefined) {
+          setStatus(prev => ({ ...prev, speed_bps: data.speed_bps }));
+        }
       } catch (err) { /* ignore */ }
     });
     return () => es.close();
@@ -317,6 +335,7 @@ export default function GoBinUI() {
 
   const activeCount = queueData.filter(j => j.status === "downloading").length;
   const remainingBytes = queueData.filter(j => j.status !== "completed").reduce((a, j) => a + ((j.total_bytes || 0) - (j.downloaded_bytes || 0)), 0);
+  const speedBps = status.speed_bps || 0;
 
   return (
     <div style={{ minHeight: "100vh", background: theme.bg, color: theme.text, fontFamily: font, lineHeight: 1.5 }}>
@@ -360,10 +379,10 @@ export default function GoBinUI() {
       </nav>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, padding: "20px 28px" }}>
-        <StatCard label="Status" value={queuePaused ? "Paused" : "Active"} sub={`uptime: ${status.uptime_secs || 0}s`} icon={<Icons.Activity />} accent={queuePaused ? theme.warning : theme.accent} />
-        <StatCard label="Queue" value={queueData.length} sub={`${activeCount} downloading`} icon={<Icons.Download />} accent={theme.accent} />
-        <StatCard label="Remaining" value={formatBytes(remainingBytes)} icon={<Icons.Clock />} accent={theme.purple} />
-        <StatCard label="Version" value={status.version || "—"} icon={<Icons.Cpu />} accent={theme.success} />
+        <StatCard label="Speed" value={formatSpeed(speedBps)} sub={`${activeCount} active`} icon={<Icons.Activity />} accent={theme.accent} />
+        <StatCard label="Queue" value={queueData.length} sub={`${formatBytes(remainingBytes)} remaining`} icon={<Icons.Download />} accent={theme.accent} />
+        <StatCard label="ETA" value={formatETA(remainingBytes, speedBps)} sub={queuePaused ? "Paused" : ""} icon={<Icons.Clock />} accent={theme.purple} />
+        <StatCard label="Status" value={queuePaused ? "Paused" : "Active"} sub={`v${status.version || "?"} · ${status.uptime_secs || 0}s uptime`} icon={<Icons.Cpu />} accent={queuePaused ? theme.warning : theme.success} />
       </div>
 
       <div style={{ padding: "0 28px 28px" }}>

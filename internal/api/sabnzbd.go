@@ -192,12 +192,34 @@ func (s *Server) sabGetQueue(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) sabGetHistory(w http.ResponseWriter, _ *http.Request) {
-	// History requires persistent storage — return empty for now
+	entries, err := s.store.ListHistory(100)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"status": false, "error": err.Error()})
+		return
+	}
+
+	slots := make([]map[string]any, 0, len(entries))
+	for _, e := range entries {
+		slots = append(slots, map[string]any{
+			"nzo_id":   e.ID,
+			"name":     e.Name,
+			"nzbname":  e.Name,
+			"status":   capitalizeFirst(e.Status),
+			"category": e.Category,
+			"size":     e.TotalBytes / 1024 / 1024, // MB
+			"downloaded": e.DownloadedBytes / 1024 / 1024,
+			"completed":  e.CompletedAt.Unix(),
+			"fail_message": e.Error,
+			"download_time": int(e.CompletedAt.Sub(e.StartedAt).Seconds()),
+			"stage_log": []any{},
+		})
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"history": map[string]any{
-			"noofslots":       0,
-			"noofslots_total": 0,
-			"slots":           []any{},
+			"noofslots":       len(slots),
+			"noofslots_total": s.store.CountHistory(),
+			"slots":           slots,
 		},
 	})
 }
@@ -218,7 +240,7 @@ func (s *Server) sabAddURL(w http.ResponseWriter, r *http.Request) {
 	}
 
 	job := &queue.Job{
-		ID:       generateID(),
+		ID:       GenerateID(),
 		Name:     nzbName,
 		Category: r.FormValue("cat"),
 		Priority: sabPriorityToInt(r.FormValue("priority")),
@@ -297,7 +319,7 @@ func (s *Server) sabAddFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	job := &queue.Job{
-		ID:            generateID(),
+		ID:            GenerateID(),
 		Name:          name,
 		NZBPath:       nzbPath,
 		Category:      r.FormValue("cat"),
@@ -438,6 +460,13 @@ func sabPriorityToInt(s string) int {
 	default:
 		return 0
 	}
+}
+
+func capitalizeFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 func boolToInt(b bool) int {

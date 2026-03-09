@@ -1,5 +1,5 @@
 // Package engine orchestrates the download pipeline:
-// queue → NZB parse → NNTP fetch → yEnc decode → file assembly.
+// queue → NZB parse → NNTP fetch → yEnc decode → file assembly → post-processing.
 package engine
 
 import (
@@ -16,25 +16,40 @@ import (
 	"github.com/phekno/gobin/internal/logging"
 	"github.com/phekno/gobin/internal/metrics"
 	"github.com/phekno/gobin/internal/nntp"
+	"github.com/phekno/gobin/internal/notify"
 	"github.com/phekno/gobin/internal/nzb"
+	"github.com/phekno/gobin/internal/postprocess"
 	"github.com/phekno/gobin/internal/queue"
+	"github.com/phekno/gobin/internal/storage"
 )
 
 // Engine watches the queue and downloads NZBs.
 type Engine struct {
-	queue  *queue.Manager
-	cfgMgr *config.Manager
+	queue    *queue.Manager
+	cfgMgr   *config.Manager
+	store    *storage.Store
+	notifier *notify.Notifier
+	Speed    *queue.SpeedTracker
 }
 
 // New creates a download engine.
-func New(q *queue.Manager, cfgMgr *config.Manager) *Engine {
-	return &Engine{queue: q, cfgMgr: cfgMgr}
+func New(q *queue.Manager, cfgMgr *config.Manager, store *storage.Store, notifier *notify.Notifier) *Engine {
+	return &Engine{
+		queue:    q,
+		cfgMgr:  cfgMgr,
+		store:   store,
+		notifier: notifier,
+		Speed:   &queue.SpeedTracker{},
+	}
 }
 
 // Run starts the engine loop. It watches for queued jobs and processes them.
 // Blocks until the context is cancelled.
 func (e *Engine) Run(ctx context.Context) {
 	slog.Info("download engine started")
+
+	// Restore queued jobs from storage on startup
+	e.restoreJobs()
 
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -54,12 +69,73 @@ func (e *Engine) Run(ctx context.Context) {
 	}
 }
 
+// restoreJobs reloads persisted jobs from storage into the queue.
+func (e *Engine) restoreJobs() {
+	records, err := e.store.ListJobs()
+	if err != nil {
+		slog.Error("failed to restore jobs from storage", "error", err)
+		return
+	}
+	for _, rec := range records {
+		job := recordToJob(rec)
+		// Only restore jobs that weren't completed/failed
+		if job.GetStatus() == queue.StatusQueued ||
+			job.GetStatus() == queue.StatusDownloading ||
+			job.GetStatus() == queue.StatusPaused {
+			// Reset downloading jobs to queued (they'll restart)
+			if job.GetStatus() == queue.StatusDownloading {
+				job.SetStatus(queue.StatusQueued)
+			}
+			if err := e.queue.Add(job); err != nil {
+				slog.Warn("skipping duplicate restored job", "id", rec.ID, "error", err)
+				continue
+			}
+			slog.Info("restored job from storage", "id", rec.ID, "name", rec.Name, "status", rec.Status)
+		}
+	}
+}
+
+// persistJob saves the current job state to storage.
+func (e *Engine) persistJob(job *queue.Job) {
+	rec := jobToRecord(job)
+	if err := e.store.SaveJob(rec); err != nil {
+		slog.Error("failed to persist job", "id", job.ID, "error", err)
+	}
+}
+
+// moveToHistory saves a completed/failed job to history and removes from active jobs.
+func (e *Engine) moveToHistory(job *queue.Job) {
+	entry := &storage.HistoryEntry{
+		ID:              job.ID,
+		Name:            job.Name,
+		Category:        job.Category,
+		Status:          job.GetStatus().String(),
+		Error:           job.Error,
+		TotalBytes:      job.TotalBytes,
+		DownloadedBytes: job.DownloadedBytes.Load(),
+		TotalSegments:   job.TotalSegments,
+		FailedSegments:  job.FailedSegments.Load(),
+		AddedAt:         job.AddedAt,
+		StartedAt:       job.StartedAt,
+		CompletedAt:     job.DoneAt,
+	}
+	if !job.StartedAt.IsZero() && !job.DoneAt.IsZero() {
+		entry.Duration = job.DoneAt.Sub(job.StartedAt).Round(time.Second).String()
+	}
+
+	if err := e.store.SaveHistory(entry); err != nil {
+		slog.Error("failed to save history", "id", job.ID, "error", err)
+	}
+	_ = e.store.DeleteJob(job.ID)
+}
+
 func (e *Engine) processJob(ctx context.Context, job *queue.Job) {
 	logger := logging.WithJob(slog.Default(), job.ID, job.Name)
 
 	// Mark as downloading
 	job.SetStatus(queue.StatusDownloading)
 	job.StartedAt = time.Now()
+	e.persistJob(job)
 
 	logger.Info("starting download", "nzb_path", job.NZBPath, "segments", job.TotalSegments)
 	logging.LogDownloadStart(logger, job.ID, job.TotalSegments, job.TotalBytes)
@@ -73,13 +149,13 @@ func (e *Engine) processJob(ctx context.Context, job *queue.Job) {
 		job.Error = fmt.Sprintf("NZB parse error: %v", err)
 		job.SetStatus(queue.StatusFailed)
 		job.DoneAt = time.Now()
+		e.moveToHistory(job)
 		return
 	}
 
-	// Create assembler for this job
+	// Determine output directory
 	outputDir := cfg.General.CompleteDir
 	if job.Category != "" {
-		// Check if category has a custom dir
 		for _, cat := range cfg.Categories {
 			if strings.EqualFold(cat.Name, job.Category) && cat.Dir != "" {
 				outputDir = outputDir + "/" + cat.Dir
@@ -88,22 +164,26 @@ func (e *Engine) processJob(ctx context.Context, job *queue.Job) {
 		}
 	}
 
-	asm, err := assembler.New(cfg.General.DownloadDir+"/"+job.Name, outputDir)
+	workDir := cfg.General.DownloadDir + "/" + job.Name
+
+	asm, err := assembler.New(workDir, outputDir)
 	if err != nil {
 		logger.Error("failed to create assembler", "error", err)
 		job.Error = fmt.Sprintf("assembler error: %v", err)
 		job.SetStatus(queue.StatusFailed)
 		job.DoneAt = time.Now()
+		e.moveToHistory(job)
 		return
 	}
 
-	// Build NNTP connection pools (sorted by priority)
+	// Build NNTP connection pools
 	pools, err := e.createPools(cfg)
 	if err != nil {
 		logger.Error("failed to create NNTP pools", "error", err)
 		job.Error = fmt.Sprintf("NNTP connection error: %v", err)
 		job.SetStatus(queue.StatusFailed)
 		job.DoneAt = time.Now()
+		e.moveToHistory(job)
 		return
 	}
 	defer e.closePools(pools)
@@ -117,12 +197,13 @@ func (e *Engine) processJob(ctx context.Context, job *queue.Job) {
 			job.SetStatus(queue.StatusFailed)
 			job.Error = "cancelled"
 			job.DoneAt = time.Now()
+			e.moveToHistory(job)
 			return
 		}
 
-		// Check if job was paused
 		if job.GetStatus() == queue.StatusPaused {
 			logger.Info("job paused, stopping")
+			e.persistJob(job)
 			return
 		}
 
@@ -132,7 +213,6 @@ func (e *Engine) processJob(ctx context.Context, job *queue.Job) {
 		err := e.downloadFile(ctx, job, logger, pools, asm, file, cfg.Downloads.MaxRetries)
 		if err != nil {
 			logger.Error("file download failed", "filename", filename, "error", err)
-			// Continue with next file — partial downloads are still useful
 			continue
 		}
 
@@ -140,21 +220,60 @@ func (e *Engine) processJob(ctx context.Context, job *queue.Job) {
 		if err := asm.Finalize(filename); err != nil {
 			logger.Error("failed to finalize file", "filename", filename, "error", err)
 		}
+
+		// Persist progress periodically
+		e.persistJob(job)
 	}
 
 	metrics.NNTPConnectionsActive.Set(0)
 
+	// Post-processing
+	if cfg.PostProcess.Par2Enabled || cfg.PostProcess.UnpackEnabled {
+		job.SetStatus(queue.StatusPostProcessing)
+		e.persistJob(job)
+		logging.LogPostProcess(logger, job.ID, "pipeline", "starting")
+
+		pp := postprocess.New(cfg.PostProcess)
+		result := pp.Run(logger, job.ID, outputDir)
+
+		if result.Error != nil {
+			logger.Error("post-processing failed", "error", result.Error)
+			job.Error = fmt.Sprintf("post-processing: %v", result.Error)
+		}
+	}
+
 	// Mark complete
 	job.DoneAt = time.Now()
 	duration := job.DoneAt.Sub(job.StartedAt)
-	job.SetStatus(queue.StatusCompleted)
+
+	if job.Error != "" {
+		job.SetStatus(queue.StatusFailed)
+	} else {
+		job.SetStatus(queue.StatusCompleted)
+	}
 
 	logging.LogDownloadComplete(logger, job.ID, duration, job.DownloadedBytes.Load())
-	logger.Info("download complete",
-		"duration", duration,
-		"segments_ok", job.DoneSegments.Load(),
-		"segments_failed", job.FailedSegments.Load(),
-	)
+
+	// Send notifications
+	eventType := "complete"
+	if job.Error != "" {
+		eventType = "failed"
+	}
+	e.notifier.Notify(ctx, notify.Event{
+		Type:     eventType,
+		Name:     job.Name,
+		Category: job.Category,
+		Status:   job.GetStatus().String(),
+		Size:     job.DownloadedBytes.Load(),
+		Duration: duration,
+		Error:    job.Error,
+	})
+
+	// Move to history
+	e.moveToHistory(job)
+
+	// Remove from queue
+	_ = e.queue.Remove(job.ID)
 }
 
 // downloadFile fetches all segments for a single file and writes them to disk.
@@ -175,9 +294,6 @@ func (e *Engine) downloadFile(
 	}
 	defer func() { _ = f.Close() }()
 
-	// Segments are already sorted by number (parser does this).
-	// Fetch them sequentially to write in order.
-	// Use a worker pool for concurrent fetching with ordered output.
 	type result struct {
 		index int
 		data  []byte
@@ -221,13 +337,10 @@ func (e *Engine) downloadFile(
 		close(resultCh)
 	}()
 
-	// Collect results and write in order
+	// Collect results
 	results := make([]result, len(file.Segments))
-	received := 0
-
 	for r := range resultCh {
 		results[r.index] = r
-		received++
 	}
 
 	// Write segments in order
@@ -239,10 +352,8 @@ func (e *Engine) downloadFile(
 			continue
 		}
 
-		// Decode yEnc
 		decoded, decErr := decoder.DecodeYEnc(r.data)
 		if decErr != nil {
-			// CRC mismatch returns both result and error — use the data anyway
 			if decoded == nil {
 				job.FailedSegments.Add(1)
 				metrics.DownloadSegmentsFailed.Inc()
@@ -261,24 +372,26 @@ func (e *Engine) downloadFile(
 			return fmt.Errorf("writing segment %d: %w", file.Segments[i].Number, err)
 		}
 
-		metrics.YEncDecodedBytesTotal.Add(int64(len(decoded.Data)))
+		dataLen := int64(len(decoded.Data))
+		metrics.YEncDecodedBytesTotal.Add(dataLen)
 		job.DoneSegments.Add(1)
-		job.DownloadedBytes.Add(int64(len(decoded.Data)))
+		job.DownloadedBytes.Add(dataLen)
 		metrics.DownloadBytesTotal.Add(int64(len(r.data)))
 		metrics.DownloadSegmentsOK.Inc()
+		e.Speed.Record(dataLen)
+		metrics.DownloadSpeedBps.Set(int64(e.Speed.BytesPerSecond()))
 	}
 
 	return nil
 }
 
-// serverPool wraps an NNTP pool with its priority and groups.
+// serverPool wraps an NNTP pool with its priority.
 type serverPool struct {
 	pool     *nntp.Pool
 	priority int
 	name     string
 }
 
-// fetchSegment fetches a single segment, trying servers by priority with retries.
 func (e *Engine) fetchSegment(ctx context.Context, pools []*serverPool, messageID string, maxRetries int) ([]byte, error) {
 	var lastErr error
 
@@ -303,12 +416,10 @@ func (e *Engine) fetchSegment(ctx context.Context, pools []*serverPool, messageI
 
 			lastErr = err
 
-			// Article not found — try next server (don't retry same server)
 			if strings.Contains(err.Error(), "not found") {
 				break
 			}
 
-			// Other errors — retry on same server
 			slog.Debug("segment fetch retry",
 				"server", sp.name,
 				"message_id", messageID,
@@ -329,8 +440,8 @@ func (e *Engine) createPools(cfg *config.Config) ([]*serverPool, error) {
 	pools := make([]*serverPool, 0, len(cfg.Servers))
 
 	for _, srv := range cfg.Servers {
-		if srv.Host == "" {
-			continue
+		if srv.Host == "" || srv.Host == "news.example.com" {
+			continue // Skip placeholder servers
 		}
 		nntpCfg := nntp.ServerConfig{
 			Host:     srv.Host,
@@ -352,7 +463,7 @@ func (e *Engine) createPools(cfg *config.Config) ([]*serverPool, error) {
 	}
 
 	if len(pools) == 0 {
-		return nil, fmt.Errorf("no valid servers configured")
+		return nil, fmt.Errorf("no valid servers configured (update your config with real Usenet server details)")
 	}
 
 	// Sort by priority (0 = primary, higher = backup)
@@ -362,11 +473,7 @@ func (e *Engine) createPools(cfg *config.Config) ([]*serverPool, error) {
 		}
 	}
 
-	slog.Info("NNTP pools created",
-		"servers", len(pools),
-		"primary", pools[0].name,
-	)
-
+	slog.Info("NNTP pools created", "servers", len(pools), "primary", pools[0].name)
 	return pools, nil
 }
 
@@ -374,4 +481,65 @@ func (e *Engine) closePools(pools []*serverPool) {
 	for _, sp := range pools {
 		sp.pool.Close()
 	}
+}
+
+// --- Conversion helpers ---
+
+func jobToRecord(j *queue.Job) *storage.JobRecord {
+	return &storage.JobRecord{
+		ID:              j.ID,
+		Name:            j.Name,
+		NZBPath:         j.NZBPath,
+		Category:        j.Category,
+		Priority:        j.Priority,
+		Status:          j.GetStatus().String(),
+		AddedAt:         j.AddedAt,
+		StartedAt:       j.StartedAt,
+		DoneAt:          j.DoneAt,
+		Error:           j.Error,
+		TotalSegments:   j.TotalSegments,
+		DoneSegments:    j.DoneSegments.Load(),
+		TotalBytes:      j.TotalBytes,
+		DownloadedBytes: j.DownloadedBytes.Load(),
+		FailedSegments:  j.FailedSegments.Load(),
+	}
+}
+
+func recordToJob(r *storage.JobRecord) *queue.Job {
+	j := &queue.Job{
+		ID:            r.ID,
+		Name:          r.Name,
+		NZBPath:       r.NZBPath,
+		Category:      r.Category,
+		Priority:      r.Priority,
+		AddedAt:       r.AddedAt,
+		StartedAt:     r.StartedAt,
+		DoneAt:        r.DoneAt,
+		Error:         r.Error,
+		TotalSegments: r.TotalSegments,
+		TotalBytes:    r.TotalBytes,
+	}
+	j.DoneSegments.Store(r.DoneSegments)
+	j.DownloadedBytes.Store(r.DownloadedBytes)
+	j.FailedSegments.Store(r.FailedSegments)
+
+	// Parse status string back to Status type
+	switch r.Status {
+	case "queued":
+		j.SetStatus(queue.StatusQueued)
+	case "downloading":
+		j.SetStatus(queue.StatusDownloading)
+	case "paused":
+		j.SetStatus(queue.StatusPaused)
+	case "post-processing":
+		j.SetStatus(queue.StatusPostProcessing)
+	case "completed":
+		j.SetStatus(queue.StatusCompleted)
+	case "failed":
+		j.SetStatus(queue.StatusFailed)
+	default:
+		j.SetStatus(queue.StatusQueued)
+	}
+
+	return j
 }
