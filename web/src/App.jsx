@@ -356,21 +356,39 @@ export default function GoBinUI() {
 
   useEffect(() => { fetchQueue(); fetchStatus(); fetchHistory(); }, [fetchQueue, fetchStatus, fetchHistory]);
 
-  // Live updates via polling (reliable across all environments)
+  // SSE for live updates, with polling fallback
   useEffect(() => {
+    let lastSSEUpdate = 0;
+
+    const applyUpdate = (data) => {
+      setQueueData(data.queue || []);
+      setQueuePaused(data.paused || false);
+      setStatus(prev => ({
+        ...prev,
+        speed_bps: data.speed_bps ?? prev.speed_bps,
+        uptime_secs: data.uptime_secs ?? prev.uptime_secs,
+        version: data.version ?? prev.version,
+      }));
+      setSpeedHistory(prev => [...prev.slice(1), data.speed_bps || 0]);
+    };
+
+    // SSE connection
+    const es = new EventSource("/api/events");
+    es.addEventListener("queue", (e) => {
+      lastSSEUpdate = Date.now();
+      try { applyUpdate(JSON.parse(e.data)); } catch (err) { /* ignore */ }
+    });
+
+    // Polling fallback — only runs when SSE hasn't sent data recently
     const poll = setInterval(async () => {
+      if (Date.now() - lastSSEUpdate < 3000) return; // SSE is working, skip
       try {
-        const data = await apiFetch("/api/queue");
-        setQueueData(data.queue || []);
-        setQueuePaused(data.paused || false);
+        const [q, s] = await Promise.all([apiFetch("/api/queue"), apiFetch("/api/status")]);
+        applyUpdate({ ...q, ...s });
       } catch (e) { /* ignore */ }
-      try {
-        const s = await apiFetch("/api/status");
-        setStatus(s);
-        setSpeedHistory(prev => [...prev.slice(1), s.speed_bps || 0]);
-      } catch (e) { /* ignore */ }
-    }, 1000);
-    return () => clearInterval(poll);
+    }, 2000);
+
+    return () => { es.close(); clearInterval(poll); };
   }, []);
 
   const handlePause = async (id) => { await apiPost(`/api/queue/${id}/pause`); fetchQueue(); };

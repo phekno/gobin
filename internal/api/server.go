@@ -479,6 +479,32 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	// Disable reverse proxy buffering (nginx, Traefik, Cloudflare, etc.)
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	sendUpdate := func() {
+		jobs := s.queue.List()
+		resp := make([]jobResponse, len(jobs))
+		for i, j := range jobs {
+			resp[i] = jobToResponse(j)
+		}
+		var speedBps float64
+		if s.speed != nil {
+			speedBps = s.speed.BytesPerSecond()
+		}
+		data, _ := json.Marshal(map[string]any{
+			"queue":       resp,
+			"paused":      s.queue.IsPaused(),
+			"speed_bps":   int64(speedBps),
+			"uptime_secs": int(time.Since(s.startedAt).Seconds()),
+			"version":     s.version,
+		})
+		_, _ = fmt.Fprintf(w, "event: queue\ndata: %s\n\n", data)
+		flusher.Flush()
+	}
+
+	// Send initial state immediately so the client doesn't wait for the first tick
+	sendUpdate()
 
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
@@ -488,24 +514,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
-			jobs := s.queue.List()
-			resp := make([]jobResponse, len(jobs))
-			for i, j := range jobs {
-				resp[i] = jobToResponse(j)
-			}
-			var speedBps float64
-			if s.speed != nil {
-				speedBps = s.speed.BytesPerSecond()
-			}
-			data, _ := json.Marshal(map[string]any{
-				"queue":       resp,
-				"paused":      s.queue.IsPaused(),
-				"speed_bps":   int64(speedBps),
-				"uptime_secs": int(time.Since(s.startedAt).Seconds()),
-				"version":     s.version,
-			})
-			_, _ = fmt.Fprintf(w, "event: queue\ndata: %s\n\n", data)
-			flusher.Flush()
+			sendUpdate()
 		}
 	}
 }
