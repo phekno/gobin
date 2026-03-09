@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/phekno/gobin/internal/config"
@@ -439,22 +438,24 @@ func TestHandleGetConfig_ReturnsRedactedYAML(t *testing.T) {
 
 	var body map[string]any
 	_ = json.NewDecoder(rec.Body).Decode(&body)
-	yamlStr, ok := body["config_yaml"].(string)
-	if !ok || yamlStr == "" {
-		t.Fatal("response missing config_yaml")
+	cfgObj, ok := body["config"].(map[string]any)
+	if !ok {
+		t.Fatal("response missing config object")
 	}
-	if !strings.Contains(yamlStr, "********") {
-		t.Error("config_yaml should contain redacted passwords")
+	api, _ := cfgObj["api"].(map[string]any)
+	if api["api_key"] != "********" {
+		t.Errorf("api_key should be redacted, got %v", api["api_key"])
 	}
-	if strings.Contains(yamlStr, "mypass") {
-		t.Error("config_yaml should NOT contain real passwords")
-	}
-	if strings.Contains(yamlStr, "super-secret") {
-		t.Error("config_yaml should NOT contain real API key")
+	servers, _ := cfgObj["servers"].([]any)
+	if len(servers) > 0 {
+		srv0, _ := servers[0].(map[string]any)
+		if srv0["password"] != "********" {
+			t.Errorf("password should be redacted, got %v", srv0["password"])
+		}
 	}
 }
 
-func TestHandleUpdateConfig_ValidYAML(t *testing.T) {
+func TestHandleUpdateConfig_Valid(t *testing.T) {
 	cfgMgr := testConfigMgr(t, &config.Config{
 		API: config.API{Port: 8080},
 		Servers: []config.Server{
@@ -463,17 +464,12 @@ func TestHandleUpdateConfig_ValidYAML(t *testing.T) {
 	})
 	srv := NewServer(&mockHealthChecker{}, queue.NewManager(3), cfgMgr, testStore(t), nil, nil, "test")
 
-	newYAML := `
-servers:
-  - name: updated
-    host: news.updated.com
-    port: 563
-    password: "newpass"
-api:
-  port: 9999
-`
+	newCfg := &config.Config{
+		Servers: []config.Server{{Name: "updated", Host: "news.updated.com", Port: 563, Password: "newpass"}},
+		API:     config.API{Port: 9999},
+	}
 	rec := httptest.NewRecorder()
-	body := map[string]string{"config_yaml": newYAML}
+	body := map[string]any{"config": newCfg}
 	bodyBytes, _ := json.Marshal(body)
 	req := httptest.NewRequest("PUT", "/api/config", bytes.NewReader(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
@@ -485,26 +481,23 @@ api:
 		t.Fatalf("status = %d, want 200: %s", rec.Code, errBody["error"])
 	}
 
-	// Verify the config was updated
 	updated := cfgMgr.Get()
 	if updated.Servers[0].Host != "news.updated.com" {
 		t.Errorf("server host = %q, want news.updated.com", updated.Servers[0].Host)
 	}
 }
 
-func TestHandleUpdateConfig_InvalidYAML(t *testing.T) {
+func TestHandleUpdateConfig_InvalidBody(t *testing.T) {
 	cfgMgr := testConfigMgr(t, &config.Config{API: config.API{Port: 8080}})
 	srv := NewServer(&mockHealthChecker{}, queue.NewManager(3), cfgMgr, testStore(t), nil, nil, "test")
 
 	rec := httptest.NewRecorder()
-	body := map[string]string{"config_yaml": ": invalid: yaml: ["}
-	bodyBytes, _ := json.Marshal(body)
-	req := httptest.NewRequest("PUT", "/api/config", bytes.NewReader(bodyBytes))
+	req := httptest.NewRequest("PUT", "/api/config", bytes.NewReader([]byte("not json")))
 	req.Header.Set("Content-Type", "application/json")
 	srv.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
-		t.Errorf("invalid YAML should return 400, got %d", rec.Code)
+		t.Errorf("invalid body should return 400, got %d", rec.Code)
 	}
 }
 
@@ -517,18 +510,12 @@ func TestHandleUpdateConfig_PreservesRedactedSecrets(t *testing.T) {
 	})
 	srv := NewServer(&mockHealthChecker{}, queue.NewManager(3), cfgMgr, testStore(t), nil, nil, "test")
 
-	editedYAML := `
-servers:
-  - name: test
-    host: news.example.com
-    port: 563
-    password: "********"
-api:
-  api_key: "********"
-  port: 8080
-`
+	editedCfg := &config.Config{
+		Servers: []config.Server{{Name: "test", Host: "news.example.com", Port: 563, Password: "********"}},
+		API:     config.API{APIKey: "********", Port: 8080},
+	}
 	rec := httptest.NewRecorder()
-	body := map[string]string{"config_yaml": editedYAML}
+	body := map[string]any{"config": editedCfg}
 	bodyBytes, _ := json.Marshal(body)
 	req := httptest.NewRequest("PUT", "/api/config", bytes.NewReader(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")

@@ -12,117 +12,117 @@ const redactedPlaceholder = "********"
 
 // Config represents the complete GoBin configuration.
 type Config struct {
-	General       General       `yaml:"general"`
-	Servers       []Server      `yaml:"servers"`
-	Categories    []Category    `yaml:"categories"`
-	Downloads     Downloads     `yaml:"downloads"`
-	Schedule      Schedule      `yaml:"schedule"`
-	PostProcess   PostProcess   `yaml:"postprocess"`
-	API           API           `yaml:"api"`
-	Notifications Notifications `yaml:"notifications"`
-	RSS           RSS           `yaml:"rss"`
+	General       General       `yaml:"general" json:"general"`
+	Servers       []Server      `yaml:"servers" json:"servers"`
+	Categories    []Category    `yaml:"categories" json:"categories"`
+	Downloads     Downloads     `yaml:"downloads" json:"downloads"`
+	Schedule      Schedule      `yaml:"schedule" json:"schedule"`
+	PostProcess   PostProcess   `yaml:"postprocess" json:"postprocess"`
+	API           API           `yaml:"api" json:"api"`
+	Notifications Notifications `yaml:"notifications" json:"notifications"`
+	RSS           RSS           `yaml:"rss" json:"rss"`
 }
 
 type General struct {
-	DownloadDir string `yaml:"download_dir"`
-	CompleteDir string `yaml:"complete_dir"`
-	WatchDir    string `yaml:"watch_dir"`
-	Permissions string `yaml:"permissions"`
-	LogLevel    string `yaml:"log_level"`
+	DownloadDir string `yaml:"download_dir" json:"download_dir"`
+	CompleteDir string `yaml:"complete_dir" json:"complete_dir"`
+	WatchDir    string `yaml:"watch_dir" json:"watch_dir"`
+	Permissions string `yaml:"permissions" json:"permissions"`
+	LogLevel    string `yaml:"log_level" json:"log_level"`
 }
 
 type Server struct {
-	Name        string `yaml:"name"`
-	Host        string `yaml:"host"`
-	Port        int    `yaml:"port"`
-	TLS         bool   `yaml:"tls"`
-	Username    string `yaml:"username"`
-	Password    string `yaml:"password"`
-	Connections int    `yaml:"connections"`
-	Priority    int    `yaml:"priority"`
-	Retention   int    `yaml:"retention"`
+	Name        string `yaml:"name" json:"name"`
+	Host        string `yaml:"host" json:"host"`
+	Port        int    `yaml:"port" json:"port"`
+	TLS         bool   `yaml:"tls" json:"tls"`
+	Username    string `yaml:"username" json:"username"`
+	Password    string `yaml:"password" json:"password"`
+	Connections int    `yaml:"connections" json:"connections"`
+	Priority    int    `yaml:"priority" json:"priority"`
+	Retention   int    `yaml:"retention" json:"retention"`
 }
 
 type Category struct {
-	Name   string `yaml:"name"`
-	Dir    string `yaml:"dir"`
-	Script string `yaml:"script"`
+	Name   string `yaml:"name" json:"name"`
+	Dir    string `yaml:"dir" json:"dir"`
+	Script string `yaml:"script" json:"script"`
 }
 
 type Downloads struct {
-	MaxRetries     int    `yaml:"max_retries"`
-	ArticleCacheMB int   `yaml:"article_cache_mb"`
-	TempDir        string `yaml:"temp_dir"`
-	SpeedLimitKbps int   `yaml:"speed_limit_kbps"`
+	MaxRetries     int    `yaml:"max_retries" json:"max_retries"`
+	ArticleCacheMB int   `yaml:"article_cache_mb" json:"article_cache_mb"`
+	TempDir        string `yaml:"temp_dir" json:"temp_dir"`
+	SpeedLimitKbps int   `yaml:"speed_limit_kbps" json:"speed_limit_kbps"`
 }
 
 type Schedule struct {
-	Enabled bool           `yaml:"enabled"`
-	Rules   []ScheduleRule `yaml:"rules"`
+	Enabled bool           `yaml:"enabled" json:"enabled"`
+	Rules   []ScheduleRule `yaml:"rules" json:"rules"`
 }
 
 type ScheduleRule struct {
-	Days           []string `yaml:"days"`
-	Start          string   `yaml:"start"`
-	End            string   `yaml:"end"`
-	SpeedLimitKbps int      `yaml:"speed_limit_kbps"`
+	Days           []string `yaml:"days" json:"days"`
+	Start          string   `yaml:"start" json:"start"`
+	End            string   `yaml:"end" json:"end"`
+	SpeedLimitKbps int      `yaml:"speed_limit_kbps" json:"speed_limit_kbps"`
 }
 
 type PostProcess struct {
-	Par2Enabled        bool   `yaml:"par2_enabled"`
-	Par2Path           string `yaml:"par2_path"`
-	UnpackEnabled      bool   `yaml:"unpack_enabled"`
-	SevenzPath         string `yaml:"sevenz_path"`
-	CleanupAfterUnpack bool   `yaml:"cleanup_after_unpack"`
-	ScriptDir          string `yaml:"script_dir"`
+	Par2Enabled        bool   `yaml:"par2_enabled" json:"par2_enabled"`
+	Par2Path           string `yaml:"par2_path" json:"par2_path"`
+	UnpackEnabled      bool   `yaml:"unpack_enabled" json:"unpack_enabled"`
+	SevenzPath         string `yaml:"sevenz_path" json:"sevenz_path"`
+	CleanupAfterUnpack bool   `yaml:"cleanup_after_unpack" json:"cleanup_after_unpack"`
+	ScriptDir          string `yaml:"script_dir" json:"script_dir"`
 }
 
 type API struct {
-	Listen      string      `yaml:"listen"`
-	Port        int         `yaml:"port"`
-	APIKey      string      `yaml:"api_key"`
-	BaseURL     string      `yaml:"base_url"`
-	CORSOrigins []string    `yaml:"cors_origins"`
-	ForwardAuth ForwardAuth `yaml:"forward_auth"`
+	Listen      string      `yaml:"listen" json:"listen"`
+	Port        int         `yaml:"port" json:"port"`
+	APIKey      string      `yaml:"api_key" json:"api_key"`
+	BaseURL     string      `yaml:"base_url" json:"base_url"`
+	CORSOrigins []string    `yaml:"cors_origins" json:"cors_origins"`
+	ForwardAuth ForwardAuth `yaml:"forward_auth" json:"forward_auth"`
 }
 
 type ForwardAuth struct {
-	Enabled       bool     `yaml:"enabled"`
-	UserHeader    string   `yaml:"user_header"`
-	NameHeader    string   `yaml:"name_header"`
-	EmailHeader   string   `yaml:"email_header"`
-	GroupsHeader  string   `yaml:"groups_header"`
-	AllowedGroups []string `yaml:"allowed_groups"`
+	Enabled       bool     `yaml:"enabled" json:"enabled"`
+	UserHeader    string   `yaml:"user_header" json:"user_header"`
+	NameHeader    string   `yaml:"name_header" json:"name_header"`
+	EmailHeader   string   `yaml:"email_header" json:"email_header"`
+	GroupsHeader  string   `yaml:"groups_header" json:"groups_header"`
+	AllowedGroups []string `yaml:"allowed_groups" json:"allowed_groups"`
 }
 
 type Notifications struct {
-	OnComplete bool      `yaml:"on_complete"`
-	OnFailure  bool      `yaml:"on_failure"`
-	Webhooks   []Webhook `yaml:"webhooks"`
+	OnComplete bool      `yaml:"on_complete" json:"on_complete"`
+	OnFailure  bool      `yaml:"on_failure" json:"on_failure"`
+	Webhooks   []Webhook `yaml:"webhooks" json:"webhooks"`
 }
 
 type Webhook struct {
-	Name     string `yaml:"name"`
-	URL      string `yaml:"url"`
-	Template string `yaml:"template"`
+	Name     string `yaml:"name" json:"name"`
+	URL      string `yaml:"url" json:"url"`
+	Template string `yaml:"template" json:"template"`
 }
 
 type RSS struct {
-	Enabled         bool      `yaml:"enabled"`
-	IntervalMinutes int       `yaml:"interval_minutes"`
-	Feeds           []RSSFeed `yaml:"feeds"`
+	Enabled         bool      `yaml:"enabled" json:"enabled"`
+	IntervalMinutes int       `yaml:"interval_minutes" json:"interval_minutes"`
+	Feeds           []RSSFeed `yaml:"feeds" json:"feeds"`
 }
 
 type RSSFeed struct {
-	Name     string      `yaml:"name"`
-	URL      string      `yaml:"url"`
-	Category string      `yaml:"category"`
-	Filters  []RSSFilter `yaml:"filters"`
+	Name     string      `yaml:"name" json:"name"`
+	URL      string      `yaml:"url" json:"url"`
+	Category string      `yaml:"category" json:"category"`
+	Filters  []RSSFilter `yaml:"filters" json:"filters"`
 }
 
 type RSSFilter struct {
-	Include string `yaml:"include"`
-	Exclude string `yaml:"exclude"`
+	Include string `yaml:"include" json:"include"`
+	Exclude string `yaml:"exclude" json:"exclude"`
 }
 
 // Load reads, expands environment variables in, and parses a YAML config file.

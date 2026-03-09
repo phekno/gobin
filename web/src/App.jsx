@@ -147,16 +147,38 @@ function CategoryTag({ category }) {
   );
 }
 
+// --- Speed sparkline ---
+function SpeedChart({ data }) {
+  const max = Math.max(...data, 1);
+  const w = 160, h = 32;
+  const points = data.map((v, i) => `${(i / (data.length - 1)) * w},${h - (v / max) * h}`).join(" ");
+  const fillPoints = `0,${h} ${points} ${w},${h}`;
+  return (
+    <svg width={w} height={h} style={{ display: "block" }}>
+      <defs>
+        <linearGradient id="speedGrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={theme.accent} stopOpacity="0.3" />
+          <stop offset="100%" stopColor={theme.accent} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <polygon points={fillPoints} fill="url(#speedGrad)" />
+      <polyline points={points} fill="none" stroke={theme.accent} strokeWidth="1.5" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 // --- Queue item ---
 function QueueItem({ job, onPause, onResume, onRemove }) {
   const [hovered, setHovered] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   return (
     <div
       onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
       style={{
         padding: "16px 20px", background: hovered ? theme.surfaceHover : "transparent",
-        borderBottom: `1px solid ${theme.borderSubtle}`, transition: "background 0.15s ease", cursor: "default",
+        borderBottom: `1px solid ${theme.borderSubtle}`, transition: "background 0.15s ease", cursor: "pointer",
       }}
+      onClick={() => setExpanded(!expanded)}
     >
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -168,7 +190,8 @@ function QueueItem({ job, onPause, onResume, onRemove }) {
             {job.name}
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, opacity: hovered ? 1 : 0, transition: "opacity 0.15s ease" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, opacity: hovered ? 1 : 0, transition: "opacity 0.15s ease" }}
+             onClick={e => e.stopPropagation()}>
           {job.status === "paused" ? (
             <ActionBtn icon={<Icons.Play />} title="Resume" onClick={() => onResume(job.id)} />
           ) : (job.status === "downloading" || job.status === "queued") ? (
@@ -187,6 +210,21 @@ function QueueItem({ job, onPause, onResume, onRemove }) {
           {job.failed_segments > 0 && <span style={{ color: theme.error, marginLeft: 4 }}>({job.failed_segments} failed)</span>}
         </span>
       </div>
+      {expanded && (
+        <div style={{ marginTop: 12, padding: 12, background: theme.bg, borderRadius: 8, fontSize: 12, fontFamily: mono, color: theme.textMuted }}
+             onClick={e => e.stopPropagation()}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 24px" }}>
+            <div><span style={{ color: theme.textDim }}>ID:</span> <span style={{ color: theme.text }}>{job.id}</span></div>
+            <div><span style={{ color: theme.textDim }}>Priority:</span> <span style={{ color: theme.text }}>{job.priority}</span></div>
+            <div><span style={{ color: theme.textDim }}>Added:</span> <span style={{ color: theme.text }}>{job.added_at ? new Date(job.added_at).toLocaleString() : "—"}</span></div>
+            <div><span style={{ color: theme.textDim }}>Started:</span> <span style={{ color: theme.text }}>{job.started_at ? new Date(job.started_at).toLocaleString() : "—"}</span></div>
+            <div><span style={{ color: theme.textDim }}>Segments:</span> <span style={{ color: theme.text }}>{job.done_segments} / {job.total_segments} done</span>{job.failed_segments > 0 && <span style={{ color: theme.error }}> ({job.failed_segments} failed)</span>}</div>
+            <div><span style={{ color: theme.textDim }}>Downloaded:</span> <span style={{ color: theme.text }}>{formatBytes(job.downloaded_bytes)} / {formatBytes(job.total_bytes)}</span></div>
+            {job.nzb_path && <div style={{ gridColumn: "1 / -1" }}><span style={{ color: theme.textDim }}>NZB:</span> <span style={{ color: theme.text }}>{job.nzb_path}</span></div>}
+            {job.error && <div style={{ gridColumn: "1 / -1", color: theme.error }}>Error: {job.error}</div>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -288,6 +326,7 @@ export default function GoBinUI() {
   const [status, setStatus] = useState({});
   const [queuePaused, setQueuePaused] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
+  const [speedHistory, setSpeedHistory] = useState(() => new Array(30).fill(0));
 
   const fetchQueue = useCallback(async () => {
     try {
@@ -319,8 +358,14 @@ export default function GoBinUI() {
         const data = JSON.parse(e.data);
         setQueueData(data.queue || []);
         setQueuePaused(data.paused || false);
+        setStatus(prev => ({
+          ...prev,
+          speed_bps: data.speed_bps ?? prev.speed_bps,
+          uptime_secs: data.uptime_secs ?? prev.uptime_secs,
+          version: data.version ?? prev.version,
+        }));
         if (data.speed_bps !== undefined) {
-          setStatus(prev => ({ ...prev, speed_bps: data.speed_bps }));
+          setSpeedHistory(prev => [...prev.slice(1), data.speed_bps]);
         }
       } catch (err) { /* ignore */ }
     });
@@ -359,6 +404,17 @@ export default function GoBinUI() {
           </div>
           <span style={{ fontSize: 18, fontWeight: 700, letterSpacing: "-0.02em" }}>Go<span style={{ color: theme.accent }}>Bin</span></span>
           <span style={{ fontSize: 10, color: theme.textDim, fontFamily: mono, marginLeft: 4 }}>{status.version || ""}</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <SpeedChart data={speedHistory} />
+          <div style={{ textAlign: "right", minWidth: 80 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, fontFamily: mono, color: speedBps > 0 ? theme.accent : theme.textDim }}>
+              {formatSpeed(speedBps)}
+            </div>
+            <div style={{ fontSize: 10, color: theme.textDim }}>
+              {activeCount > 0 ? `${activeCount} active` : "idle"}
+            </div>
+          </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {queuePaused
@@ -416,26 +472,59 @@ export default function GoBinUI() {
 }
 
 // --- Config Editor ---
+const inputStyle = { width: "100%", padding: "8px 12px", background: theme.bg, border: `1px solid ${theme.border}`, borderRadius: 8, color: theme.text, fontFamily: font, fontSize: 13, boxSizing: "border-box" };
+const labelStyle = { fontSize: 11, color: theme.textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4, display: "block" };
+const sectionStyle = { marginBottom: 20, padding: 16, background: theme.bg, borderRadius: 8, border: `1px solid ${theme.border}` };
+const checkboxStyle = { accentColor: theme.accent, marginRight: 8 };
+
+function ConfigField({ label, value, onChange, type = "text", placeholder = "" }) {
+  if (type === "checkbox") {
+    return <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: theme.text, cursor: "pointer", marginBottom: 8 }}>
+      <input type="checkbox" checked={!!value} onChange={e => onChange(e.target.checked)} style={checkboxStyle} />{label}
+    </label>;
+  }
+  return <div style={{ marginBottom: 10 }}>
+    <label style={labelStyle}>{label}</label>
+    <input type={type} value={value || ""} onChange={e => onChange(type === "number" ? parseInt(e.target.value) || 0 : e.target.value)} placeholder={placeholder} style={inputStyle} />
+  </div>;
+}
+
 function ConfigEditor() {
-  const [yamlText, setYamlText] = useState("");
+  const [cfg, setCfg] = useState(null);
   const [configPath, setConfigPath] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [section, setSection] = useState("general");
 
   const fetchConfig = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
       const data = await apiFetch("/api/config");
-      setYamlText(data.config_yaml || "");
+      setCfg(data.config || {});
       setConfigPath(data.path || "");
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
   }, []);
 
   useEffect(() => { fetchConfig(); }, [fetchConfig]);
+
+  const update = (path, value) => {
+    setCfg(prev => {
+      const copy = JSON.parse(JSON.stringify(prev));
+      const parts = path.split(".");
+      let obj = copy;
+      for (let i = 0; i < parts.length - 1; i++) {
+        const key = isNaN(parts[i]) ? parts[i] : parseInt(parts[i]);
+        obj = obj[key];
+      }
+      obj[parts[parts.length - 1]] = value;
+      return copy;
+    });
+    setSuccess("");
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -445,7 +534,7 @@ function ConfigEditor() {
       const res = await apiFetch("/api/config", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ config_yaml: yamlText }),
+        body: JSON.stringify({ config: cfg }),
       });
       if (res.error) { setError(res.error); }
       else { setSuccess("Config saved and reloaded"); setTimeout(() => setSuccess(""), 3000); }
@@ -453,42 +542,138 @@ function ConfigEditor() {
     finally { setSaving(false); }
   };
 
+  const addServer = () => {
+    const servers = [...(cfg.servers || []), { name: "", host: "", port: 563, tls: true, username: "", password: "", connections: 10, priority: cfg.servers?.length || 0 }];
+    setCfg(prev => ({ ...prev, servers }));
+  };
+
+  const removeServer = (i) => {
+    setCfg(prev => ({ ...prev, servers: prev.servers.filter((_, idx) => idx !== i) }));
+  };
+
+  const addCategory = () => {
+    setCfg(prev => ({ ...prev, categories: [...(prev.categories || []), { name: "", dir: "" }] }));
+  };
+
+  const removeCategory = (i) => {
+    setCfg(prev => ({ ...prev, categories: prev.categories.filter((_, idx) => idx !== i) }));
+  };
+
   if (loading) return <div style={{ padding: 40, textAlign: "center", color: theme.textDim }}>Loading config...</div>;
+  if (!cfg) return null;
+
+  const sections = [
+    { key: "general", label: "General" },
+    { key: "servers", label: "Servers" },
+    { key: "categories", label: "Categories" },
+    { key: "downloads", label: "Downloads" },
+    { key: "postprocess", label: "Post-Processing" },
+    { key: "api", label: "API & Auth" },
+    { key: "notifications", label: "Notifications" },
+  ];
 
   return (
     <div style={{ padding: 20 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-        <div>
-          <span style={{ fontSize: 11, color: theme.textDim, fontFamily: mono }}>{configPath}</span>
-        </div>
+        <span style={{ fontSize: 11, color: theme.textDim, fontFamily: mono }}>{configPath}</span>
         <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={fetchConfig} style={{ padding: "6px 14px", borderRadius: 8, border: `1px solid ${theme.border}`, background: "transparent", color: theme.textMuted, cursor: "pointer", fontSize: 12, fontFamily: font }}>
-            Reload
-          </button>
-          <button onClick={handleSave} disabled={saving} style={{ padding: "6px 14px", borderRadius: 8, border: "none", background: theme.accent, color: theme.bg, cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: font, opacity: saving ? 0.5 : 1 }}>
-            {saving ? "Saving..." : "Save"}
-          </button>
+          <button onClick={fetchConfig} style={{ padding: "6px 14px", borderRadius: 8, border: `1px solid ${theme.border}`, background: "transparent", color: theme.textMuted, cursor: "pointer", fontSize: 12, fontFamily: font }}>Reload</button>
+          <button onClick={handleSave} disabled={saving} style={{ padding: "6px 14px", borderRadius: 8, border: "none", background: theme.accent, color: theme.bg, cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: font, opacity: saving ? 0.5 : 1 }}>{saving ? "Saving..." : "Save"}</button>
         </div>
       </div>
-      <div style={{ fontSize: 11, color: theme.textDim, marginBottom: 8 }}>
-        Passwords and secrets are shown as ********. Leaving them unchanged preserves the original values.
-      </div>
+      <div style={{ fontSize: 11, color: theme.textDim, marginBottom: 12 }}>Passwords shown as ******** — leaving unchanged preserves originals.</div>
       {error && <div style={{ color: theme.error, fontSize: 12, marginBottom: 8, padding: "8px 12px", background: theme.errorDim, borderRadius: 8 }}>{error}</div>}
       {success && <div style={{ color: theme.success, fontSize: 12, marginBottom: 8, padding: "8px 12px", background: "rgba(16,185,129,0.12)", borderRadius: 8 }}>{success}</div>}
-      <textarea
-        value={yamlText}
-        onChange={e => { setYamlText(e.target.value); setSuccess(""); }}
-        spellCheck={false}
-        style={{
-          width: "100%", minHeight: 500, padding: 16, boxSizing: "border-box",
-          fontFamily: mono, fontSize: 13, lineHeight: 1.6, tabSize: 2,
-          background: theme.bg, color: theme.text,
-          border: `1px solid ${theme.border}`, borderRadius: 8,
-          resize: "vertical", outline: "none",
-        }}
-        onFocus={e => e.target.style.borderColor = theme.accent}
-        onBlur={e => e.target.style.borderColor = theme.border}
-      />
+
+      <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
+        {sections.map(s => (
+          <button key={s.key} onClick={() => setSection(s.key)} style={{
+            padding: "6px 14px", borderRadius: 20, fontSize: 12, fontWeight: 500, cursor: "pointer", fontFamily: font,
+            border: section === s.key ? "none" : `1px solid ${theme.border}`,
+            background: section === s.key ? theme.accentDim : "transparent",
+            color: section === s.key ? theme.accent : theme.textMuted,
+          }}>{s.label}</button>
+        ))}
+      </div>
+
+      {section === "general" && <div style={sectionStyle}>
+        <ConfigField label="Download Directory" value={cfg.general?.download_dir} onChange={v => update("general.download_dir", v)} />
+        <ConfigField label="Complete Directory" value={cfg.general?.complete_dir} onChange={v => update("general.complete_dir", v)} />
+        <ConfigField label="Watch Directory" value={cfg.general?.watch_dir} onChange={v => update("general.watch_dir", v)} />
+        <ConfigField label="Log Level" value={cfg.general?.log_level} onChange={v => update("general.log_level", v)} placeholder="debug, info, warn, error" />
+      </div>}
+
+      {section === "servers" && <div>
+        {(cfg.servers || []).map((srv, i) => (
+          <div key={i} style={{ ...sectionStyle, position: "relative" }}>
+            <button onClick={() => removeServer(i)} style={{ position: "absolute", top: 12, right: 12, background: "transparent", border: "none", color: theme.error, cursor: "pointer", fontSize: 16 }}>×</button>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <ConfigField label="Name" value={srv.name} onChange={v => update(`servers.${i}.name`, v)} />
+              <ConfigField label="Host" value={srv.host} onChange={v => update(`servers.${i}.host`, v)} />
+              <ConfigField label="Port" value={srv.port} onChange={v => update(`servers.${i}.port`, v)} type="number" />
+              <ConfigField label="Connections" value={srv.connections} onChange={v => update(`servers.${i}.connections`, v)} type="number" />
+              <ConfigField label="Username" value={srv.username} onChange={v => update(`servers.${i}.username`, v)} />
+              <ConfigField label="Password" value={srv.password} onChange={v => update(`servers.${i}.password`, v)} type="password" />
+              <ConfigField label="Priority" value={srv.priority} onChange={v => update(`servers.${i}.priority`, v)} type="number" />
+              <div style={{ display: "flex", alignItems: "end", paddingBottom: 10 }}>
+                <ConfigField label="TLS" value={srv.tls} onChange={v => update(`servers.${i}.tls`, v)} type="checkbox" />
+              </div>
+            </div>
+          </div>
+        ))}
+        <button onClick={addServer} style={{ padding: "8px 16px", borderRadius: 8, border: `1px dashed ${theme.border}`, background: "transparent", color: theme.textMuted, cursor: "pointer", width: "100%", fontSize: 13, fontFamily: font }}>+ Add Server</button>
+      </div>}
+
+      {section === "categories" && <div>
+        {(cfg.categories || []).map((cat, i) => (
+          <div key={i} style={{ ...sectionStyle, display: "flex", gap: 10, alignItems: "end" }}>
+            <div style={{ flex: 1 }}><ConfigField label="Name" value={cat.name} onChange={v => update(`categories.${i}.name`, v)} /></div>
+            <div style={{ flex: 1 }}><ConfigField label="Directory" value={cat.dir} onChange={v => update(`categories.${i}.dir`, v)} /></div>
+            <button onClick={() => removeCategory(i)} style={{ background: "transparent", border: "none", color: theme.error, cursor: "pointer", fontSize: 16, paddingBottom: 14 }}>×</button>
+          </div>
+        ))}
+        <button onClick={addCategory} style={{ padding: "8px 16px", borderRadius: 8, border: `1px dashed ${theme.border}`, background: "transparent", color: theme.textMuted, cursor: "pointer", width: "100%", fontSize: 13, fontFamily: font }}>+ Add Category</button>
+      </div>}
+
+      {section === "downloads" && <div style={sectionStyle}>
+        <ConfigField label="Max Retries" value={cfg.downloads?.max_retries} onChange={v => update("downloads.max_retries", v)} type="number" />
+        <ConfigField label="Speed Limit (KB/s, 0 = unlimited)" value={cfg.downloads?.speed_limit_kbps} onChange={v => update("downloads.speed_limit_kbps", v)} type="number" />
+        <ConfigField label="Temp Directory" value={cfg.downloads?.temp_dir} onChange={v => update("downloads.temp_dir", v)} />
+      </div>}
+
+      {section === "postprocess" && <div style={sectionStyle}>
+        <ConfigField label="PAR2 Verify/Repair" value={cfg.postprocess?.par2_enabled} onChange={v => update("postprocess.par2_enabled", v)} type="checkbox" />
+        <ConfigField label="Extract Archives" value={cfg.postprocess?.unpack_enabled} onChange={v => update("postprocess.unpack_enabled", v)} type="checkbox" />
+        <ConfigField label="Cleanup After Unpack" value={cfg.postprocess?.cleanup_after_unpack} onChange={v => update("postprocess.cleanup_after_unpack", v)} type="checkbox" />
+        <ConfigField label="PAR2 Path" value={cfg.postprocess?.par2_path} onChange={v => update("postprocess.par2_path", v)} />
+        <ConfigField label="7z Path" value={cfg.postprocess?.sevenz_path} onChange={v => update("postprocess.sevenz_path", v)} />
+      </div>}
+
+      {section === "api" && <div style={sectionStyle}>
+        <ConfigField label="Listen Address" value={cfg.api?.listen} onChange={v => update("api.listen", v)} />
+        <ConfigField label="Port" value={cfg.api?.port} onChange={v => update("api.port", v)} type="number" />
+        <ConfigField label="API Key" value={cfg.api?.api_key} onChange={v => update("api.api_key", v)} type="password" />
+        <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${theme.border}` }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: theme.text }}>Forward Auth (Authelia / Pocket ID)</div>
+          <ConfigField label="Enabled" value={cfg.api?.forward_auth?.enabled} onChange={v => update("api.forward_auth.enabled", v)} type="checkbox" />
+          {cfg.api?.forward_auth?.enabled && <>
+            <ConfigField label="User Header" value={cfg.api?.forward_auth?.user_header} onChange={v => update("api.forward_auth.user_header", v)} placeholder="Remote-User" />
+            <ConfigField label="Groups Header" value={cfg.api?.forward_auth?.groups_header} onChange={v => update("api.forward_auth.groups_header", v)} placeholder="Remote-Groups" />
+          </>}
+        </div>
+      </div>}
+
+      {section === "notifications" && <div style={sectionStyle}>
+        <ConfigField label="Notify on Complete" value={cfg.notifications?.on_complete} onChange={v => update("notifications.on_complete", v)} type="checkbox" />
+        <ConfigField label="Notify on Failure" value={cfg.notifications?.on_failure} onChange={v => update("notifications.on_failure", v)} type="checkbox" />
+        {(cfg.notifications?.webhooks || []).map((wh, i) => (
+          <div key={i} style={{ marginTop: 12, padding: 12, background: theme.surface, borderRadius: 8, border: `1px solid ${theme.border}` }}>
+            <ConfigField label="Webhook Name" value={wh.name} onChange={v => update(`notifications.webhooks.${i}.name`, v)} />
+            <ConfigField label="URL" value={wh.url} onChange={v => update(`notifications.webhooks.${i}.url`, v)} />
+            <ConfigField label="Template (Go template, optional)" value={wh.template} onChange={v => update(`notifications.webhooks.${i}.template`, v)} />
+          </div>
+        ))}
+      </div>}
     </div>
   );
 }

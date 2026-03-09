@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -276,7 +277,16 @@ func (e *Engine) processJob(ctx context.Context, job *queue.Job) {
 	_ = e.queue.Remove(job.ID)
 }
 
-// downloadFile fetches all segments for a single file and writes them to disk.
+// segmentResult holds the raw fetched data for a single segment.
+type segmentResult struct {
+	index int
+	data  []byte
+	err   error
+}
+
+// downloadFile fetches segments concurrently and writes them to disk in order.
+// Uses a sliding window to limit memory usage — only buffers a small window
+// of segments ahead of the write cursor, not the entire file.
 func (e *Engine) downloadFile(
 	ctx context.Context,
 	job *queue.Job,
@@ -294,11 +304,6 @@ func (e *Engine) downloadFile(
 	}
 	defer func() { _ = f.Close() }()
 
-	type result struct {
-		index int
-		data  []byte
-		err   error
-	}
 
 	concurrency := pools[0].pool.MaxConns()
 	if concurrency < 1 {
@@ -308,13 +313,9 @@ func (e *Engine) downloadFile(
 		concurrency = len(file.Segments)
 	}
 
-	segCh := make(chan int, len(file.Segments))
-	for i := range file.Segments {
-		segCh <- i
-	}
-	close(segCh)
-
-	resultCh := make(chan result, concurrency)
+	// Feed segment indices to workers
+	segCh := make(chan int, concurrency*2)
+	resultCh := make(chan segmentResult, concurrency*2)
 
 	var wg sync.WaitGroup
 	for range concurrency {
@@ -327,60 +328,104 @@ func (e *Engine) downloadFile(
 				}
 				seg := file.Segments[idx]
 				data, fetchErr := e.fetchSegment(ctx, pools, seg.MessageID, maxRetries)
-				resultCh <- result{index: idx, data: data, err: fetchErr}
+				resultCh <- segmentResult{index: idx, data: data, err: fetchErr}
 			}
 		}()
 	}
 
+	// Feed segments and close when done
 	go func() {
+		for i := range file.Segments {
+			segCh <- i
+		}
+		close(segCh)
 		wg.Wait()
 		close(resultCh)
 	}()
 
-	// Collect results
-	results := make([]result, len(file.Segments))
+	// Write segments in order using a small buffer window.
+	// We only keep segments that arrived out-of-order in the buffer.
+	writeIdx := 0
+	pending := make(map[int]segmentResult)
+
 	for r := range resultCh {
-		results[r.index] = r
+		pending[r.index] = r
+
+		// Write as many sequential segments as we can
+		for {
+			p, ok := pending[writeIdx]
+			if !ok {
+				break
+			}
+			delete(pending, writeIdx)
+
+			if err := e.processSegment(job, logger, asm, f, file, writeIdx, p); err != nil {
+				return err
+			}
+			writeIdx++
+		}
 	}
 
-	// Write segments in order
-	for i, r := range results {
-		if r.err != nil {
+	// Flush any remaining (shouldn't happen if all segments arrived)
+	for writeIdx < len(file.Segments) {
+		p, ok := pending[writeIdx]
+		if !ok {
 			job.FailedSegments.Add(1)
 			metrics.DownloadSegmentsFailed.Inc()
-			logging.LogSegmentError(logger, job.ID, file.Segments[i].MessageID, 0, r.err)
+			writeIdx++
 			continue
 		}
-
-		decoded, decErr := decoder.DecodeYEnc(r.data)
-		if decErr != nil {
-			if decoded == nil {
-				job.FailedSegments.Add(1)
-				metrics.DownloadSegmentsFailed.Inc()
-				metrics.YEncCRCErrors.Inc()
-				logging.LogSegmentError(logger, job.ID, file.Segments[i].MessageID, 0, decErr)
-				continue
-			}
-			metrics.YEncCRCErrors.Inc()
-			logger.Warn("yenc CRC mismatch, using data anyway",
-				"segment", file.Segments[i].Number,
-				"error", decErr,
-			)
+		delete(pending, writeIdx)
+		if err := e.processSegment(job, logger, asm, f, file, writeIdx, p); err != nil {
+			return err
 		}
-
-		if err := asm.WriteSegment(f, decoded.Data); err != nil {
-			return fmt.Errorf("writing segment %d: %w", file.Segments[i].Number, err)
-		}
-
-		dataLen := int64(len(decoded.Data))
-		metrics.YEncDecodedBytesTotal.Add(dataLen)
-		job.DoneSegments.Add(1)
-		job.DownloadedBytes.Add(dataLen)
-		metrics.DownloadBytesTotal.Add(int64(len(r.data)))
-		metrics.DownloadSegmentsOK.Inc()
-		e.Speed.Record(dataLen)
-		metrics.DownloadSpeedBps.Set(int64(e.Speed.BytesPerSecond()))
+		writeIdx++
 	}
+
+	return nil
+}
+
+// processSegment decodes and writes a single segment to disk.
+func (e *Engine) processSegment(
+	job *queue.Job,
+	logger *slog.Logger,
+	asm *assembler.Assembler,
+	f *os.File,
+	file nzb.File,
+	index int,
+	r segmentResult,
+) error {
+	if r.err != nil {
+		job.FailedSegments.Add(1)
+		metrics.DownloadSegmentsFailed.Inc()
+		logging.LogSegmentError(logger, job.ID, file.Segments[index].MessageID, 0, r.err)
+		return nil // continue with next segment
+	}
+
+	decoded, decErr := decoder.DecodeYEnc(r.data)
+	if decErr != nil {
+		if decoded == nil {
+			job.FailedSegments.Add(1)
+			metrics.DownloadSegmentsFailed.Inc()
+			metrics.YEncCRCErrors.Inc()
+			logging.LogSegmentError(logger, job.ID, file.Segments[index].MessageID, 0, decErr)
+			return nil
+		}
+		metrics.YEncCRCErrors.Inc()
+	}
+
+	if err := asm.WriteSegment(f, decoded.Data); err != nil {
+		return fmt.Errorf("writing segment %d: %w", file.Segments[index].Number, err)
+	}
+
+	dataLen := int64(len(decoded.Data))
+	metrics.YEncDecodedBytesTotal.Add(dataLen)
+	job.DoneSegments.Add(1)
+	job.DownloadedBytes.Add(dataLen)
+	metrics.DownloadBytesTotal.Add(int64(len(r.data)))
+	metrics.DownloadSegmentsOK.Inc()
+	e.Speed.Record(dataLen)
+	metrics.DownloadSpeedBps.Set(int64(e.Speed.BytesPerSecond()))
 
 	return nil
 }

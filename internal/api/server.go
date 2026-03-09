@@ -19,7 +19,6 @@ import (
 	"github.com/phekno/gobin/internal/nzb"
 	"github.com/phekno/gobin/internal/queue"
 	"github.com/phekno/gobin/internal/storage"
-	"gopkg.in/yaml.v3"
 )
 
 // Server handles API requests.
@@ -219,11 +218,14 @@ func hasAllowedGroup(groupsHeader string, allowed []string) bool {
 type jobResponse struct {
 	ID              string  `json:"id"`
 	Name            string  `json:"name"`
+	NZBPath         string  `json:"nzb_path,omitempty"`
 	Category        string  `json:"category"`
 	Priority        int     `json:"priority"`
 	Status          string  `json:"status"`
 	Progress        float64 `json:"progress"`
 	AddedAt         string  `json:"added_at"`
+	StartedAt       string  `json:"started_at,omitempty"`
+	Error           string  `json:"error,omitempty"`
 	TotalSegments   int     `json:"total_segments"`
 	DoneSegments    int64   `json:"done_segments"`
 	FailedSegments  int64   `json:"failed_segments"`
@@ -232,20 +234,26 @@ type jobResponse struct {
 }
 
 func jobToResponse(j *queue.Job) jobResponse {
-	return jobResponse{
+	r := jobResponse{
 		ID:              j.ID,
 		Name:            j.Name,
+		NZBPath:         j.NZBPath,
 		Category:        j.Category,
 		Priority:        j.Priority,
 		Status:          j.Status.String(),
 		Progress:        j.Progress(),
 		AddedAt:         j.AddedAt.Format(time.RFC3339),
+		Error:           j.Error,
 		TotalSegments:   j.TotalSegments,
 		DoneSegments:    j.DoneSegments.Load(),
 		FailedSegments:  j.FailedSegments.Load(),
 		TotalBytes:      j.TotalBytes,
 		DownloadedBytes: j.DownloadedBytes.Load(),
 	}
+	if !j.StartedAt.IsZero() {
+		r.StartedAt = j.StartedAt.Format(time.RFC3339)
+	}
+	return r
 }
 
 // --- Handlers ---
@@ -405,41 +413,29 @@ func (s *Server) handleNZBUpload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 	cfg := s.configMgr.Get()
 	redacted := cfg.Redacted()
-
-	yamlBytes, err := yaml.Marshal(redacted)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to serialize config"})
-		return
-	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"config_yaml": string(yamlBytes),
-		"path":        s.configMgr.FilePath(),
+		"config": redacted,
+		"path":   s.configMgr.FilePath(),
 	})
 }
 
 func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ConfigYAML string `json:"config_yaml"`
+		Config *config.Config `json:"config"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
-	if req.ConfigYAML == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "config_yaml is required"})
+	if req.Config == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "config is required"})
 		return
 	}
 
-	var edited config.Config
-	if err := yaml.Unmarshal([]byte(req.ConfigYAML), &edited); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid YAML: " + err.Error()})
-		return
-	}
-
-	if err := s.configMgr.Update(&edited); err != nil {
+	if err := s.configMgr.Update(req.Config); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -492,9 +488,11 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 				speedBps = s.speed.BytesPerSecond()
 			}
 			data, _ := json.Marshal(map[string]any{
-				"queue":     resp,
-				"paused":    s.queue.IsPaused(),
-				"speed_bps": int64(speedBps),
+				"queue":       resp,
+				"paused":      s.queue.IsPaused(),
+				"speed_bps":   int64(speedBps),
+				"uptime_secs": int(time.Since(s.startedAt).Seconds()),
+				"version":     s.version,
 			})
 			_, _ = fmt.Fprintf(w, "event: queue\ndata: %s\n\n", data)
 			flusher.Flush()
