@@ -116,6 +116,12 @@ func (st *SpeedTracker) Record(bytes int64) {
 func (st *SpeedTracker) BytesPerSecond() float64 {
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	// Prune expired samples
+	now := time.Now()
+	cutoff := now.Add(-10 * time.Second)
+	for len(st.samples) > 0 && st.samples[0].at.Before(cutoff) {
+		st.samples = st.samples[1:]
+	}
 	if len(st.samples) < 2 {
 		return 0
 	}
@@ -280,6 +286,21 @@ func (m *Manager) List() []*Job {
 	result := make([]*Job, len(m.jobs))
 	copy(result, m.jobs)
 	return result
+}
+
+// RegisterCancel stores a cancel function for an active job.
+// Called by the engine when it starts processing a job.
+func (m *Manager) RegisterCancel(id string, cancel context.CancelFunc) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cancel[id] = cancel
+}
+
+// UnregisterCancel removes the cancel function for a job.
+func (m *Manager) UnregisterCancel(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.cancel, id)
 }
 
 // IsPaused returns whether the entire queue is paused.

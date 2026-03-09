@@ -139,22 +139,33 @@ func (r *Runner) extract(dir string) (bool, error) {
 		sevenzPath = "7z"
 	}
 
-	// Look for archives: .rar, .7z, .zip
-	patterns := []string{"*.rar", "*.7z", "*.zip"}
+	// Find the main archive files to extract.
+	// For split RARs: extract only the .rar file (7z follows .r00/.r01 automatically).
+	// For modern split RARs: extract only .part01.rar (7z follows .part02.rar etc).
+	// Skip .r00, .r01 etc — those are split parts, not the main archive.
 	var archives []string
-	for _, pattern := range patterns {
+
+	rarFiles, _ := filepath.Glob(filepath.Join(dir, "*.rar"))
+	for _, f := range rarFiles {
+		base := strings.ToLower(filepath.Base(f))
+		// Skip split parts like .part02.rar, .part03.rar (only extract part01 or non-partNN)
+		if strings.Contains(base, ".part") && !strings.Contains(base, ".part01.rar") && !strings.Contains(base, ".part1.rar") {
+			continue
+		}
+		archives = append(archives, f)
+	}
+
+	// Also look for .7z and .zip (less common in Usenet but possible)
+	for _, pattern := range []string{"*.7z", "*.zip"} {
 		matches, _ := filepath.Glob(filepath.Join(dir, pattern))
 		archives = append(archives, matches...)
 	}
-
-	// Also check for split RAR files (.r00, .r01, etc.) — only extract the .rar
-	// 7z handles this automatically when given the .rar file
 
 	if len(archives) == 0 {
 		return false, nil
 	}
 
-	// Extract each archive
+	extracted := false
 	for _, archive := range archives {
 		slog.Info("extracting", "archive", filepath.Base(archive))
 
@@ -163,11 +174,18 @@ func (r *Runner) extract(dir string) (bool, error) {
 		cmd.Dir = dir
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			return false, fmt.Errorf("extracting %s: %s: %w", filepath.Base(archive), string(output), err)
+			// Log but continue — some files may not be valid archives
+			slog.Warn("extraction failed for file, skipping",
+				"archive", filepath.Base(archive),
+				"output", string(output),
+				"error", err,
+			)
+			continue
 		}
+		extracted = true
 	}
 
-	return true, nil
+	return extracted, nil
 }
 
 // cleanup removes archive and parity files after successful extraction.

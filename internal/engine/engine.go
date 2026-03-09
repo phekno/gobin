@@ -147,6 +147,12 @@ func (e *Engine) safeProcessJob(ctx context.Context, job *queue.Job) {
 }
 
 func (e *Engine) processJob(ctx context.Context, job *queue.Job) {
+	// Create a cancellable context for this job so it can be stopped on delete
+	jobCtx, jobCancel := context.WithCancel(ctx)
+	defer jobCancel()
+	e.queue.RegisterCancel(job.ID, jobCancel)
+	defer e.queue.UnregisterCancel(job.ID)
+
 	logger := logging.WithJob(slog.Default(), job.ID, job.Name)
 
 	// Mark as downloading
@@ -209,7 +215,7 @@ func (e *Engine) processJob(ctx context.Context, job *queue.Job) {
 
 	// Download each file in the NZB
 	for _, file := range parsed.Files {
-		if ctx.Err() != nil {
+		if jobCtx.Err() != nil {
 			logger.Info("download cancelled")
 			job.SetStatus(queue.StatusFailed)
 			job.Error = "cancelled"
@@ -227,7 +233,7 @@ func (e *Engine) processJob(ctx context.Context, job *queue.Job) {
 		filename := file.Filename()
 		logger.Info("downloading file", "filename", filename, "segments", len(file.Segments))
 
-		err := e.downloadFile(ctx, job, logger, pools, asm, file, cfg.Downloads.MaxRetries)
+		err := e.downloadFile(jobCtx, job, logger, pools, asm, file, cfg.Downloads.MaxRetries)
 		if err != nil {
 			logger.Error("file download failed", "filename", filename, "error", err)
 			continue
@@ -276,7 +282,7 @@ func (e *Engine) processJob(ctx context.Context, job *queue.Job) {
 	if job.Error != "" {
 		eventType = "failed"
 	}
-	e.notifier.Notify(ctx, notify.Event{
+	e.notifier.Notify(context.Background(), notify.Event{
 		Type:     eventType,
 		Name:     job.Name,
 		Category: job.Category,
