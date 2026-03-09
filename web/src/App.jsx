@@ -244,9 +244,11 @@ function ActionBtn({ icon, title, onClick, color }) {
 }
 
 // --- History item ---
-function HistoryItem({ item }) {
+function HistoryItem({ item, onDelete }) {
+  const [hovered, setHovered] = useState(false);
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "12px 20px", borderBottom: `1px solid ${theme.borderSubtle}`, fontSize: 13 }}>
+    <div onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
+      style={{ display: "flex", alignItems: "center", gap: 16, padding: "12px 20px", borderBottom: `1px solid ${theme.borderSubtle}`, fontSize: 13, background: hovered ? theme.surfaceHover : "transparent", transition: "background 0.15s ease" }}>
       <div style={{ width: 20, display: "flex", justifyContent: "center" }}>
         {item.status === "completed" ? <span style={{ color: theme.success }}><Icons.Check /></span> : <span style={{ color: theme.error }}><Icons.X /></span>}
       </div>
@@ -255,7 +257,12 @@ function HistoryItem({ item }) {
         <div style={{ display: "flex", gap: 12, marginTop: 3, fontSize: 11, color: theme.textMuted }}>
           <CategoryTag category={item.category} />
           <span>{formatBytes(item.total_bytes)}</span>
+          {item.duration && <span>{item.duration}</span>}
+          {item.error && <span style={{ color: theme.error }}>{item.error}</span>}
         </div>
+      </div>
+      <div style={{ opacity: hovered ? 1 : 0, transition: "opacity 0.15s ease" }}>
+        <ActionBtn icon={<Icons.Trash />} title="Delete" onClick={() => onDelete(item.id)} color={theme.error} />
       </div>
     </div>
   );
@@ -349,11 +356,14 @@ export default function GoBinUI() {
 
   useEffect(() => { fetchQueue(); fetchStatus(); fetchHistory(); }, [fetchQueue, fetchStatus, fetchHistory]);
 
-  // SSE for live queue updates
+  // SSE for live queue updates, with polling fallback
   useEffect(() => {
-    const url = API_KEY ? `/api/events?apikey=${API_KEY}` : "/api/events";
+    const url = "/api/events";
     const es = new EventSource(url);
+    let sseWorking = false;
+
     es.addEventListener("queue", (e) => {
+      sseWorking = true;
       try {
         const data = JSON.parse(e.data);
         setQueueData(data.queue || []);
@@ -369,14 +379,25 @@ export default function GoBinUI() {
         }
       } catch (err) { /* ignore */ }
     });
-    return () => es.close();
-  }, []);
+
+    // Polling fallback in case SSE isn't working
+    const pollInterval = setInterval(() => {
+      if (!sseWorking) {
+        fetchQueue();
+        fetchStatus();
+      }
+    }, 3000);
+
+    return () => { es.close(); clearInterval(pollInterval); };
+  }, [fetchQueue, fetchStatus]);
 
   const handlePause = async (id) => { await apiPost(`/api/queue/${id}/pause`); fetchQueue(); };
   const handleResume = async (id) => { await apiPost(`/api/queue/${id}/resume`); fetchQueue(); };
   const handleRemove = async (id) => { await apiDelete(`/api/queue/${id}`); fetchQueue(); };
   const handlePauseAll = async () => { await apiPost("/api/queue/pause"); fetchQueue(); };
   const handleResumeAll = async () => { await apiPost("/api/queue/resume"); fetchQueue(); };
+  const handleDeleteHistory = async (id) => { await apiDelete(`/api/history/${id}`); fetchHistory(); };
+  const handleClearHistory = async () => { await apiDelete("/api/history"); fetchHistory(); };
 
   const activeCount = queueData.filter(j => j.status === "downloading").length;
   const remainingBytes = queueData.filter(j => j.status !== "completed").reduce((a, j) => a + ((j.total_bytes || 0) - (j.downloaded_bytes || 0)), 0);
@@ -457,8 +478,17 @@ export default function GoBinUI() {
             )}
           </>)}
           {tab === "history" && (<>
+            {historyData.length > 0 && (
+              <div style={{ display: "flex", justifyContent: "flex-end", padding: "8px 20px", borderBottom: `1px solid ${theme.borderSubtle}` }}>
+                <button onClick={handleClearHistory} style={{ fontSize: 11, color: theme.error, background: "transparent", border: "none", cursor: "pointer", fontFamily: font, opacity: 0.7 }}>
+                  Clear All History
+                </button>
+              </div>
+            )}
             {historyData.map((item, i) => (
-              <div key={item.id} style={{ animation: `slideIn 0.3s ease ${i * 0.05}s both` }}><HistoryItem item={item} /></div>
+              <div key={item.id} style={{ animation: `slideIn 0.3s ease ${i * 0.05}s both` }}>
+                <HistoryItem item={item} onDelete={handleDeleteHistory} />
+              </div>
             ))}
             {historyData.length === 0 && (
               <div style={{ padding: 60, textAlign: "center", color: theme.textDim }}><div style={{ fontSize: 14 }}>No history yet</div></div>

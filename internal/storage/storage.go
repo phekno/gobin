@@ -185,6 +185,17 @@ func (s *Store) DeleteHistory(id string) error {
 	})
 }
 
+// ClearHistory removes all history entries.
+func (s *Store) ClearHistory() error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		if err := tx.DeleteBucket(bucketHistory); err != nil {
+			return err
+		}
+		_, err := tx.CreateBucket(bucketHistory)
+		return err
+	})
+}
+
 // CountHistory returns the number of history entries.
 func (s *Store) CountHistory() int {
 	count := 0

@@ -70,6 +70,7 @@ func (s *Server) registerRoutes() {
 
 	// History
 	api.HandleFunc("GET /api/history", s.handleGetHistory)
+	api.HandleFunc("DELETE /api/history", s.handleClearHistory)
 	api.HandleFunc("DELETE /api/history/{id}", s.handleDeleteHistory)
 
 	// NZB upload
@@ -82,11 +83,11 @@ func (s *Server) registerRoutes() {
 	// Status
 	api.HandleFunc("GET /api/status", s.handleStatus)
 
-	// SSE
-	api.HandleFunc("GET /api/events", s.handleSSE)
-
 	// Mount with auth
 	s.mux.Handle("/api/", s.authMiddleware(api))
+
+	// SSE — outside auth (EventSource can't set headers; read-only, same-origin)
+	s.mux.HandleFunc("/api/events", s.handleSSE)
 
 	// SABnzbd API compatibility (for Sonarr/Radarr/Lidarr)
 	// Auth is handled inside the handler (SABnzbd uses ?apikey= param)
@@ -345,6 +346,14 @@ func (s *Server) handleGetHistory(w http.ResponseWriter, _ *http.Request) {
 		entries = []*storage.HistoryEntry{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"history": entries})
+}
+
+func (s *Server) handleClearHistory(w http.ResponseWriter, _ *http.Request) {
+	if err := s.store.ClearHistory(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "history cleared"})
 }
 
 func (s *Server) handleDeleteHistory(w http.ResponseWriter, r *http.Request) {
