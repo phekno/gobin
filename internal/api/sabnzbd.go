@@ -246,7 +246,7 @@ func (s *Server) sabAddURL(w http.ResponseWriter, r *http.Request) {
 		Priority: sabPriorityToInt(r.FormValue("priority")),
 	}
 
-	if err := s.queue.Add(job); err != nil {
+	if err := s.addAndPersistJob(job); err != nil {
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"status": false,
 			"error":  err.Error(),
@@ -328,7 +328,7 @@ func (s *Server) sabAddFile(w http.ResponseWriter, r *http.Request) {
 		TotalBytes:    parsed.TotalBytes(),
 	}
 
-	if err := s.queue.Add(job); err != nil {
+	if err := s.addAndPersistJob(job); err != nil {
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"status": false,
 			"error":  err.Error(),
@@ -378,6 +378,7 @@ func (s *Server) sabDeleteJob(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"status": false, "error": err.Error()})
 		return
 	}
+	_ = s.store.DeleteJob(id)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":  true,
 		"nzo_ids": []string{id},

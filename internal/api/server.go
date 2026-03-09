@@ -292,7 +292,7 @@ func (s *Server) handleAddToQueue(w http.ResponseWriter, r *http.Request) {
 		Category: req.Category,
 		Priority: req.Priority,
 	}
-	if err := s.queue.Add(job); err != nil {
+	if err := s.addAndPersistJob(job); err != nil {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
@@ -309,6 +309,7 @@ func (s *Server) handleRemoveFromQueue(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
+	_ = s.store.DeleteJob(id)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "removed", "id": id})
 }
 
@@ -401,7 +402,7 @@ func (s *Server) handleNZBUpload(w http.ResponseWriter, r *http.Request) {
 		TotalSegments: parsed.TotalSegments(),
 		TotalBytes:    parsed.TotalBytes(),
 	}
-	if err := s.queue.Add(job); err != nil {
+	if err := s.addAndPersistJob(job); err != nil {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
@@ -520,6 +521,27 @@ func (s *Server) saveNZB(name string, data []byte) (string, error) {
 		return "", err
 	}
 	return path, nil
+}
+
+// addAndPersistJob adds a job to the queue and persists it to storage.
+func (s *Server) addAndPersistJob(job *queue.Job) error {
+	if err := s.queue.Add(job); err != nil {
+		return err
+	}
+	// Persist to storage so it survives restarts
+	rec := &storage.JobRecord{
+		ID:            job.ID,
+		Name:          job.Name,
+		NZBPath:       job.NZBPath,
+		Category:      job.Category,
+		Priority:      job.Priority,
+		Status:        job.GetStatus().String(),
+		AddedAt:       job.AddedAt,
+		TotalSegments: job.TotalSegments,
+		TotalBytes:    job.TotalBytes,
+	}
+	_ = s.store.SaveJob(rec)
+	return nil
 }
 
 // GenerateID creates a random hex ID for jobs.

@@ -65,7 +65,7 @@ func (e *Engine) Run(ctx context.Context) {
 			if job == nil {
 				continue
 			}
-			e.processJob(ctx, job)
+			e.safeProcessJob(ctx, job)
 		}
 	}
 }
@@ -128,6 +128,22 @@ func (e *Engine) moveToHistory(job *queue.Job) {
 		slog.Error("failed to save history", "id", job.ID, "error", err)
 	}
 	_ = e.store.DeleteJob(job.ID)
+}
+
+// safeProcessJob wraps processJob with panic recovery so a single bad job
+// doesn't crash the engine loop.
+func (e *Engine) safeProcessJob(ctx context.Context, job *queue.Job) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("engine panic recovered", "job_id", job.ID, "panic", r)
+			job.Error = fmt.Sprintf("internal error: %v", r)
+			job.SetStatus(queue.StatusFailed)
+			job.DoneAt = time.Now()
+			e.moveToHistory(job)
+			_ = e.queue.Remove(job.ID)
+		}
+	}()
+	e.processJob(ctx, job)
 }
 
 func (e *Engine) processJob(ctx context.Context, job *queue.Job) {

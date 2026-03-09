@@ -13,6 +13,7 @@ ENGINE   ?= $(shell command -v podman 2>/dev/null || command -v docker 2>/dev/nu
 ## frontend: build the web UI
 frontend:
 	cd web && npm ci && npm run build
+	@touch internal/webui/dist/.gitkeep
 
 ## build: build frontend and compile the binary
 build: frontend
