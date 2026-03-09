@@ -356,40 +356,22 @@ export default function GoBinUI() {
 
   useEffect(() => { fetchQueue(); fetchStatus(); fetchHistory(); }, [fetchQueue, fetchStatus, fetchHistory]);
 
-  // SSE for live queue updates, with polling fallback
+  // Live updates via polling (reliable across all environments)
   useEffect(() => {
-    const url = "/api/events";
-    const es = new EventSource(url);
-    let sseWorking = false;
-
-    es.addEventListener("queue", (e) => {
-      sseWorking = true;
+    const poll = setInterval(async () => {
       try {
-        const data = JSON.parse(e.data);
+        const data = await apiFetch("/api/queue");
         setQueueData(data.queue || []);
         setQueuePaused(data.paused || false);
-        setStatus(prev => ({
-          ...prev,
-          speed_bps: data.speed_bps ?? prev.speed_bps,
-          uptime_secs: data.uptime_secs ?? prev.uptime_secs,
-          version: data.version ?? prev.version,
-        }));
-        if (data.speed_bps !== undefined) {
-          setSpeedHistory(prev => [...prev.slice(1), data.speed_bps]);
-        }
-      } catch (err) { /* ignore */ }
-    });
-
-    // Polling fallback in case SSE isn't working
-    const pollInterval = setInterval(() => {
-      if (!sseWorking) {
-        fetchQueue();
-        fetchStatus();
-      }
-    }, 3000);
-
-    return () => { es.close(); clearInterval(pollInterval); };
-  }, [fetchQueue, fetchStatus]);
+      } catch (e) { /* ignore */ }
+      try {
+        const s = await apiFetch("/api/status");
+        setStatus(s);
+        setSpeedHistory(prev => [...prev.slice(1), s.speed_bps || 0]);
+      } catch (e) { /* ignore */ }
+    }, 1000);
+    return () => clearInterval(poll);
+  }, []);
 
   const handlePause = async (id) => { await apiPost(`/api/queue/${id}/pause`); fetchQueue(); };
   const handleResume = async (id) => { await apiPost(`/api/queue/${id}/resume`); fetchQueue(); };
