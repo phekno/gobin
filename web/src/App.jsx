@@ -540,6 +540,7 @@ function APIKeyManager() {
       }
       setApiKey(data.api_key);
       setRevealed(true);
+      if (data.warning) alert(data.warning);
     } catch (e) {
       alert("Failed to roll API key: " + e.message);
     } finally { setRolling(false); }
@@ -593,6 +594,60 @@ function ConfigField({ label, value, onChange, type = "text", placeholder = "" }
     <label style={labelStyle}>{label}</label>
     <input type={type} value={value || ""} onChange={e => onChange(type === "number" ? parseInt(e.target.value) || 0 : e.target.value)} placeholder={placeholder} style={inputStyle} />
   </div>;
+}
+
+function ServerCard({ srv, index, update, removeServer }) {
+  const [testing, setTesting] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const handleTest = async () => {
+    setTesting(true);
+    setResult(null);
+    try {
+      const res = await fetch("/api/servers/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(API_KEY ? { "X-Api-Key": API_KEY } : {}) },
+        body: JSON.stringify({ host: srv.host, port: srv.port, tls: srv.tls, username: srv.username, password: srv.password, index }),
+      });
+      const data = await res.json();
+      setResult(data);
+    } catch (e) {
+      setResult({ success: false, error: e.message });
+    } finally { setTesting(false); }
+  };
+
+  const i = index;
+  return (
+    <div style={{ ...sectionStyle, position: "relative" }}>
+      <button onClick={() => removeServer(i)} style={{ position: "absolute", top: 12, right: 12, background: "transparent", border: "none", color: theme.error, cursor: "pointer", fontSize: 16 }}>×</button>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <ConfigField label="Name" value={srv.name} onChange={v => update(`servers.${i}.name`, v)} />
+        <ConfigField label="Host" value={srv.host} onChange={v => update(`servers.${i}.host`, v)} />
+        <ConfigField label="Port" value={srv.port} onChange={v => update(`servers.${i}.port`, v)} type="number" />
+        <ConfigField label="Connections" value={srv.connections} onChange={v => update(`servers.${i}.connections`, v)} type="number" />
+        <ConfigField label="Username" value={srv.username} onChange={v => update(`servers.${i}.username`, v)} />
+        <ConfigField label="Password" value={srv.password} onChange={v => update(`servers.${i}.password`, v)} type="password" />
+        <ConfigField label="Priority" value={srv.priority} onChange={v => update(`servers.${i}.priority`, v)} type="number" />
+        <div style={{ display: "flex", alignItems: "end", paddingBottom: 10 }}>
+          <ConfigField label="TLS" value={srv.tls} onChange={v => update(`servers.${i}.tls`, v)} type="checkbox" />
+        </div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 4 }}>
+        <button onClick={handleTest} disabled={testing || !srv.host || !srv.port} style={{
+          padding: "6px 14px", borderRadius: 8, border: "none",
+          background: theme.accentDim, color: theme.accent,
+          cursor: testing || !srv.host || !srv.port ? "default" : "pointer",
+          fontSize: 11, fontFamily: font, fontWeight: 600, whiteSpace: "nowrap",
+          opacity: testing || !srv.host || !srv.port ? 0.5 : 1,
+        }}>{testing ? "Testing..." : "Test Connection"}</button>
+        {result && (
+          <span style={{ fontSize: 11, color: result.success ? theme.success : theme.error }}>
+            {result.success ? `Connected (${result.elapsed_ms}ms)` : result.error}
+          </span>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function ConfigEditor() {
@@ -711,21 +766,7 @@ function ConfigEditor() {
 
       {section === "servers" && <div>
         {(cfg.servers || []).map((srv, i) => (
-          <div key={i} style={{ ...sectionStyle, position: "relative" }}>
-            <button onClick={() => removeServer(i)} style={{ position: "absolute", top: 12, right: 12, background: "transparent", border: "none", color: theme.error, cursor: "pointer", fontSize: 16 }}>×</button>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <ConfigField label="Name" value={srv.name} onChange={v => update(`servers.${i}.name`, v)} />
-              <ConfigField label="Host" value={srv.host} onChange={v => update(`servers.${i}.host`, v)} />
-              <ConfigField label="Port" value={srv.port} onChange={v => update(`servers.${i}.port`, v)} type="number" />
-              <ConfigField label="Connections" value={srv.connections} onChange={v => update(`servers.${i}.connections`, v)} type="number" />
-              <ConfigField label="Username" value={srv.username} onChange={v => update(`servers.${i}.username`, v)} />
-              <ConfigField label="Password" value={srv.password} onChange={v => update(`servers.${i}.password`, v)} type="password" />
-              <ConfigField label="Priority" value={srv.priority} onChange={v => update(`servers.${i}.priority`, v)} type="number" />
-              <div style={{ display: "flex", alignItems: "end", paddingBottom: 10 }}>
-                <ConfigField label="TLS" value={srv.tls} onChange={v => update(`servers.${i}.tls`, v)} type="checkbox" />
-              </div>
-            </div>
-          </div>
+          <ServerCard key={i} srv={srv} index={i} update={update} removeServer={removeServer} />
         ))}
         <button onClick={addServer} style={{ padding: "8px 16px", borderRadius: 8, border: `1px dashed ${theme.border}`, background: "transparent", color: theme.textMuted, cursor: "pointer", width: "100%", fontSize: 13, fontFamily: font }}>+ Add Server</button>
       </div>}

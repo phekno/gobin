@@ -2,9 +2,11 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -16,6 +18,7 @@ import (
 	"time"
 
 	"github.com/phekno/gobin/internal/config"
+	"github.com/phekno/gobin/internal/nntp"
 	"github.com/phekno/gobin/internal/nzb"
 	"github.com/phekno/gobin/internal/queue"
 	"github.com/phekno/gobin/internal/storage"
@@ -84,6 +87,9 @@ func (s *Server) registerRoutes() {
 	api.HandleFunc("GET /api/apikey", s.handleGetAPIKey)
 	api.HandleFunc("POST /api/apikey/roll", s.handleRollAPIKey)
 
+	// Server test
+	api.HandleFunc("POST /api/servers/test", s.handleTestServer)
+
 	// Status
 	api.HandleFunc("GET /api/status", s.handleStatus)
 
@@ -95,7 +101,12 @@ func (s *Server) registerRoutes() {
 
 	// SABnzbd API compatibility (for Sonarr/Radarr/Lidarr)
 	// Auth is handled inside the handler (SABnzbd uses ?apikey= param)
+	// Register at both /sabnzbd/api and /api (exact match) so Radarr/Sonarr
+	// can use the default SABnzbd URL format (GET /api?mode=...).
+	// The exact "/api" match takes precedence over the "/api/" prefix pattern,
+	// so this doesn't conflict with the native REST API routes.
 	s.mux.HandleFunc("/sabnzbd/api", s.handleSABnzbd)
+	s.mux.HandleFunc("/api", s.handleSABnzbd)
 
 	// Health probes (unauthenticated)
 	s.mux.HandleFunc("/healthz", s.health.LivenessHandler())
@@ -450,6 +461,13 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.configMgr.Update(req.Config); err != nil {
+		if errors.Is(err, config.ErrSaveFailed) {
+			writeJSON(w, http.StatusOK, map[string]string{
+				"status":  "config applied (in memory only)",
+				"warning": "Could not save to disk. Changes will not persist across restarts.",
+			})
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -471,15 +489,79 @@ func (s *Server) handleRollAPIKey(w http.ResponseWriter, _ *http.Request) {
 	newCfg := *cfg
 	newCfg.API.APIKey = config.GenerateAPIKey()
 
+	resp := map[string]string{
+		"api_key": newCfg.API.APIKey,
+		"status":  "API key regenerated",
+	}
+
 	if err := s.configMgr.Update(&newCfg); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+		if errors.Is(err, config.ErrSaveFailed) {
+			// Key is active in memory but won't survive a restart
+			slog.Warn("API key rolled (in memory only)", "error", err)
+			resp["warning"] = "Key is active but could not be saved to disk. It will not persist across restarts."
+		} else {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
 	}
 
 	slog.Info("API key rolled")
-	writeJSON(w, http.StatusOK, map[string]string{
-		"api_key": newCfg.API.APIKey,
-		"status":  "API key regenerated",
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleTestServer(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Host     string `json:"host"`
+		Port     int    `json:"port"`
+		TLS      bool   `json:"tls"`
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Index    int    `json:"index"` // server index to resolve redacted passwords
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	if req.Host == "" || req.Port == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host and port are required"})
+		return
+	}
+
+	// If password is the redacted placeholder, resolve from stored config
+	password := req.Password
+	if password == "********" {
+		cfg := s.configMgr.Get()
+		if req.Index >= 0 && req.Index < len(cfg.Servers) {
+			password = cfg.Servers[req.Index].Password
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	client, err := nntp.Dial(ctx, nntp.ServerConfig{
+		Host:     req.Host,
+		Port:     req.Port,
+		TLS:      req.TLS,
+		Username: req.Username,
+		Password: password,
+	})
+	elapsed := time.Since(start)
+
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"success":   false,
+			"error":     err.Error(),
+			"elapsed_ms": elapsed.Milliseconds(),
+		})
+		return
+	}
+	defer func() { _ = client.Close() }()
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success":    true,
+		"elapsed_ms": elapsed.Milliseconds(),
 	})
 }
 

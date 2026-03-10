@@ -1,10 +1,15 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
 )
+
+// ErrSaveFailed indicates the config was updated in memory but could not be
+// persisted to disk (e.g., read-only filesystem like a Kubernetes ConfigMap).
+var ErrSaveFailed = errors.New("config save failed")
 
 // Manager holds the live config with safe concurrent access and hot-reload support.
 type Manager struct {
@@ -31,6 +36,9 @@ func (m *Manager) FilePath() string {
 }
 
 // Update validates, merges redacted fields, saves to disk, and swaps the live config.
+// The in-memory config is always updated on success or disk-save failure.
+// Returns an ErrSaveFailed-wrapped error if the config was applied in memory
+// but could not be persisted (e.g., read-only filesystem).
 func (m *Manager) Update(edited *Config) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -45,7 +53,10 @@ func (m *Manager) Update(edited *Config) error {
 	}
 
 	if err := Save(m.filePath, edited); err != nil {
-		return fmt.Errorf("saving config: %w", err)
+		// Still apply in memory so the change takes effect for this session
+		m.current = edited
+		slog.Warn("config updated in memory only (disk save failed)", "error", err, "path", m.filePath)
+		return fmt.Errorf("%w: %v", ErrSaveFailed, err)
 	}
 
 	m.current = edited
