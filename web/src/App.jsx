@@ -501,6 +501,73 @@ export default function GoBinUI() {
   );
 }
 
+// --- API Key Manager ---
+function APIKeyManager() {
+  const [apiKey, setApiKey] = useState("");
+  const [revealed, setRevealed] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [rolling, setRolling] = useState(false);
+
+  const fetchKey = useCallback(async () => {
+    try {
+      const data = await apiFetch("/api/apikey");
+      setApiKey(data.api_key || "");
+    } catch (e) { /* ignore */ }
+  }, []);
+
+  useEffect(() => { fetchKey(); }, [fetchKey]);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(apiKey);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (e) { /* fallback */ }
+  };
+
+  const handleRoll = async () => {
+    if (!confirm("Generate a new API key? The old key will stop working immediately. Any external clients (Sonarr, Radarr, etc.) will need to be updated.")) return;
+    setRolling(true);
+    try {
+      const data = await apiFetch("/api/apikey/roll", { method: "POST" });
+      setApiKey(data.api_key || "");
+      setRevealed(true);
+    } catch (e) { /* ignore */ }
+    finally { setRolling(false); }
+  };
+
+  const masked = apiKey ? apiKey.slice(0, 6) + "••••••••••••••••••••••••" + apiKey.slice(-4) : "";
+
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <label style={labelStyle}>API Key</label>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <input type="text" readOnly value={revealed ? apiKey : masked}
+          style={{ ...inputStyle, flex: 1, fontFamily: mono, fontSize: 12, letterSpacing: "0.03em" }}
+          onClick={() => revealed && handleCopy()} />
+        <button onClick={() => setRevealed(!revealed)} style={{
+          padding: "8px 12px", borderRadius: 8, border: `1px solid ${theme.border}`,
+          background: "transparent", color: theme.textMuted, cursor: "pointer", fontSize: 11, fontFamily: font, whiteSpace: "nowrap",
+        }}>{revealed ? "Hide" : "Reveal"}</button>
+        <button onClick={handleCopy} style={{
+          padding: "8px 12px", borderRadius: 8, border: `1px solid ${theme.border}`,
+          background: "transparent", color: copied ? theme.success : theme.textMuted,
+          cursor: "pointer", fontSize: 11, fontFamily: font, whiteSpace: "nowrap",
+        }}>{copied ? "Copied!" : "Copy"}</button>
+        <button onClick={handleRoll} disabled={rolling} style={{
+          padding: "8px 12px", borderRadius: 8, border: "none",
+          background: theme.warningDim, color: theme.warning,
+          cursor: "pointer", fontSize: 11, fontFamily: font, fontWeight: 600, whiteSpace: "nowrap",
+          opacity: rolling ? 0.5 : 1,
+        }}>{rolling ? "Rolling..." : "Roll Key"}</button>
+      </div>
+      <div style={{ fontSize: 10, color: theme.textDim, marginTop: 4 }}>
+        Used by external clients (Sonarr, Radarr, etc.) to authenticate API requests.
+      </div>
+    </div>
+  );
+}
+
 // --- Config Editor ---
 const inputStyle = { width: "100%", padding: "8px 12px", background: theme.bg, border: `1px solid ${theme.border}`, borderRadius: 8, color: theme.text, fontFamily: font, fontSize: 13, boxSizing: "border-box" };
 const labelStyle = { fontSize: 11, color: theme.textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4, display: "block" };
@@ -682,7 +749,7 @@ function ConfigEditor() {
       {section === "api" && <div style={sectionStyle}>
         <ConfigField label="Listen Address" value={cfg.api?.listen} onChange={v => update("api.listen", v)} />
         <ConfigField label="Port" value={cfg.api?.port} onChange={v => update("api.port", v)} type="number" />
-        <ConfigField label="API Key" value={cfg.api?.api_key} onChange={v => update("api.api_key", v)} type="password" />
+        <APIKeyManager />
         <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${theme.border}` }}>
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: theme.text }}>Forward Auth (Authelia / Pocket ID)</div>
           <ConfigField label="Enabled" value={cfg.api?.forward_auth?.enabled} onChange={v => update("api.forward_auth.enabled", v)} type="checkbox" />

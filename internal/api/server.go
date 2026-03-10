@@ -80,6 +80,10 @@ func (s *Server) registerRoutes() {
 	api.HandleFunc("GET /api/config", s.handleGetConfig)
 	api.HandleFunc("PUT /api/config", s.handleUpdateConfig)
 
+	// API key management
+	api.HandleFunc("GET /api/apikey", s.handleGetAPIKey)
+	api.HandleFunc("POST /api/apikey/roll", s.handleRollAPIKey)
+
 	// Status
 	api.HandleFunc("GET /api/status", s.handleStatus)
 
@@ -451,6 +455,32 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "config saved and reloaded"})
+}
+
+func (s *Server) handleGetAPIKey(w http.ResponseWriter, _ *http.Request) {
+	cfg := s.configMgr.Get()
+	writeJSON(w, http.StatusOK, map[string]string{
+		"api_key": cfg.API.APIKey,
+	})
+}
+
+func (s *Server) handleRollAPIKey(w http.ResponseWriter, _ *http.Request) {
+	cfg := s.configMgr.Get()
+
+	// Deep copy so we don't mutate the live config directly
+	newCfg := *cfg
+	newCfg.API.APIKey = config.GenerateAPIKey()
+
+	if err := s.configMgr.Update(&newCfg); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	slog.Info("API key rolled")
+	writeJSON(w, http.StatusOK, map[string]string{
+		"api_key": newCfg.API.APIKey,
+		"status":  "API key regenerated",
+	})
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {

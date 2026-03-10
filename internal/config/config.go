@@ -1,7 +1,10 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -9,6 +12,14 @@ import (
 )
 
 const redactedPlaceholder = "********"
+
+// GenerateAPIKey creates a cryptographically random API key.
+// Format: "gobin_" prefix + 48 hex chars (24 random bytes = 192 bits of entropy).
+func GenerateAPIKey() string {
+	b := make([]byte, 24)
+	_, _ = rand.Read(b)
+	return "gobin_" + hex.EncodeToString(b)
+}
 
 // Config represents the complete GoBin configuration.
 type Config struct {
@@ -150,6 +161,14 @@ func Load(path string) (*Config, error) {
 	}
 
 	applyDefaults(cfg)
+
+	// Auto-generate API key if not set
+	if cfg.API.APIKey == "" {
+		cfg.API.APIKey = GenerateAPIKey()
+		slog.Info("generated new API key (saving to config)")
+		// Save back so the key persists across restarts
+		_ = Save(path, cfg)
+	}
 
 	if err := Validate(cfg); err != nil {
 		return nil, fmt.Errorf("validating config: %w", err)
