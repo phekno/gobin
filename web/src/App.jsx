@@ -529,11 +529,20 @@ function APIKeyManager() {
     if (!confirm("Generate a new API key? The old key will stop working immediately. Any external clients (Sonarr, Radarr, etc.) will need to be updated.")) return;
     setRolling(true);
     try {
-      const data = await apiFetch("/api/apikey/roll", { method: "POST" });
-      setApiKey(data.api_key || "");
+      const res = await fetch("/api/apikey/roll", {
+        method: "POST",
+        headers: API_KEY ? { "X-Api-Key": API_KEY } : {},
+      });
+      const data = await res.json();
+      if (!res.ok || !data.api_key) {
+        alert("Failed to roll API key: " + (data.error || `HTTP ${res.status}`));
+        return;
+      }
+      setApiKey(data.api_key);
       setRevealed(true);
-    } catch (e) { /* ignore */ }
-    finally { setRolling(false); }
+    } catch (e) {
+      alert("Failed to roll API key: " + e.message);
+    } finally { setRolling(false); }
   };
 
   const masked = apiKey ? apiKey.slice(0, 6) + "••••••••••••••••••••••••" + apiKey.slice(-4) : "";
