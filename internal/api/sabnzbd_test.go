@@ -36,8 +36,8 @@ func TestSAB_Version_NoAuth(t *testing.T) {
 	}
 	var body map[string]string
 	_ = json.NewDecoder(rec.Body).Decode(&body)
-	if body["version"] != "0.1.0" {
-		t.Errorf("version = %q, want 0.1.0", body["version"])
+	if body["version"] != sabVersionCompat {
+		t.Errorf("version = %q, want %s", body["version"], sabVersionCompat)
 	}
 }
 

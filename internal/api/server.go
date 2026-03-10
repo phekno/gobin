@@ -550,9 +550,19 @@ func (s *Server) handleTestServer(w http.ResponseWriter, r *http.Request) {
 	elapsed := time.Since(start)
 
 	if err != nil {
+		// NNTP 502 = "service unavailable", typically means too many connections.
+		// If downloads are actively running, the server is clearly reachable.
+		if strings.Contains(err.Error(), "502") && len(s.queue.ActiveJobs()) > 0 {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"success":    true,
+				"elapsed_ms": elapsed.Milliseconds(),
+				"warning":    "Server is reachable (all connection slots in use by active downloads)",
+			})
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"success":   false,
-			"error":     err.Error(),
+			"success":    false,
+			"error":      err.Error(),
 			"elapsed_ms": elapsed.Milliseconds(),
 		})
 		return

@@ -641,8 +641,8 @@ function ServerCard({ srv, index, update, removeServer }) {
           opacity: testing || !srv.host || !srv.port ? 0.5 : 1,
         }}>{testing ? "Testing..." : "Test Connection"}</button>
         {result && (
-          <span style={{ fontSize: 11, color: result.success ? theme.success : theme.error }}>
-            {result.success ? `Connected (${result.elapsed_ms}ms)` : result.error}
+          <span style={{ fontSize: 11, color: result.success ? (result.warning ? theme.warning : theme.success) : theme.error }}>
+            {result.success ? (result.warning || `Connected (${result.elapsed_ms}ms)`) : result.error}
           </span>
         )}
       </div>

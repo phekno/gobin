@@ -19,6 +19,10 @@ import (
 // Endpoint: /sabnzbd/api?mode=...&apikey=...&output=json
 // Also accessible at: /api?mode=...
 
+// sabVersionCompat is the SABnzbd version reported to *arr apps.
+// Radarr/Sonarr require >= 0.7.0; we report 4.0.0 to satisfy all checks.
+const sabVersionCompat = "4.0.0"
+
 func (s *Server) handleSABnzbd(w http.ResponseWriter, r *http.Request) {
 	mode := r.FormValue("mode")
 
@@ -26,7 +30,7 @@ func (s *Server) handleSABnzbd(w http.ResponseWriter, r *http.Request) {
 	switch mode {
 	case "version":
 		writeJSON(w, http.StatusOK, map[string]string{
-			"version": s.version,
+			"version": sabVersionCompat,
 		})
 		return
 	case "auth":
@@ -185,7 +189,7 @@ func (s *Server) sabGetQueue(w http.ResponseWriter, _ *http.Request) {
 			"mbleft":          "0.0",
 			"diskspace1":      "0",
 			"diskspace2":      "0",
-			"version":         s.version,
+			"version":         sabVersionCompat,
 			"slots":           slots,
 		},
 	})
@@ -397,7 +401,7 @@ func (s *Server) sabStatus(w http.ResponseWriter, _ *http.Request) {
 		"speed":      "0",
 		"speedlimit": 0,
 		"uptime":     fmt.Sprintf("%ds", int(time.Since(s.startedAt).Seconds())),
-		"version":    s.version,
+		"version":    sabVersionCompat,
 		"diskspace1": "0",
 		"diskspace2": "0",
 	})
